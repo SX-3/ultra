@@ -1,0 +1,52 @@
+{
+  "name": "@sx3/ultra",
+  "type": "module",
+  "version": "0.0.1",
+  "description": "Ultra: type-safe RPC over HTTP/WebSocket for Bun",
+  "author": "SX3",
+  "license": "MIT",
+  "homepage": "https://github.com/SX-3/ultra",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/SX-3/ultra"
+  },
+  "bugs": {
+    "url": "https://github.com/SX-3/ultra/issues"
+  },
+  "keywords": ["RPC", "HTTP", "WebSocket", "Bun", "Framework", "TypeScript"],
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/ultra.d.mts",
+      "import": "./dist/ultra.mjs",
+      "default": "./dist/ultra.mjs"
+    },
+    "./*": {
+      "types": "./dist/*.d.mts",
+      "import": "./dist/*.mjs",
+      "default": "./dist/*.mjs"
+    },
+    "./package.json": "./package.json"
+  },
+  "main": "./dist/ultra.mjs",
+  "module": "./dist/ultra.mjs",
+  "types": "./dist/ultra.d.mts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsdown",
+    "dev": "tsdown --watch",
+    "test": "bun test"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "devDependencies": {
+    "@antfu/eslint-config": "^6.7.1",
+    "@types/bun": "latest",
+    "eslint": "^9.39.2",
+    "eslint-plugin-format": "^1.1.0",
+    "tsdown": "^0.18.2"
+  }
+}
