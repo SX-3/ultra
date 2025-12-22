@@ -76,7 +76,7 @@ export class Ultra<
     const PluginProcedures extends ProceduresMap,
     const PluginContext extends BaseContext,
     const PluginSocketData extends DefaultSocketData,
-  >(entity: Middleware<unknown, unknown, Context> | Ultra<PluginProcedures, PluginContext, PluginSocketData>,
+  >(entity: Middleware<any, any, Context> | Ultra<PluginProcedures, PluginContext, PluginSocketData>,
   ): Ultra<Procedures & PluginProcedures, Context & PluginContext, SocketData & PluginSocketData> {
     // If entity is a middleware, add to middlewares set
     if (typeof entity === 'function') {

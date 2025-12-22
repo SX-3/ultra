@@ -3,7 +3,7 @@
   "type": "module",
   "version": "0.0.1",
   "private": false,
-  "description": "Ultra: type-safe RPC over HTTP/WebSocket for Bun",
+  "description": "Type-safe RPC over HTTP/WebSocket for Bun",
   "author": "SX3",
   "license": "MIT",
   "homepage": "https://github.com/SX-3/ultra",

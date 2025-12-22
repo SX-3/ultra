@@ -1,8 +1,10 @@
+[![npm](https://img.shields.io/npm/v/@sx3/ultra)](https://www.npmjs.com/package/@sx3/ultra)
+
 # Ultra
 
 Type-safe and fast RPC over HTTP/WebSocket for [Bun](https://bun.sh).
 
-## Оглавление
+## Table of contents
 
 - [Install](#install)
 - [Quick start](#quick-start)
@@ -18,8 +20,6 @@ Type-safe and fast RPC over HTTP/WebSocket for [Bun](https://bun.sh).
   - [Sessions](#sessions)
   - [Authentication](#authentication)
   - [Crypto](#crypto)
-
----
 
 ## Install
 
@@ -80,7 +80,7 @@ const http = createHTTPClient<Server>({
 });
 
 const users = await http.users.list(); // [{ id: 1, name: 'Alice' }, { id: 2, name: 'Bob' }]
-const books = await http.books.list(); // [{ id: 1, title: 'TypeScript' }, { id: 2, title: 'Brave New World' }]
+const books = await http.books.list(); // [{ id: 1, title: 'TypeScript' }, ...]
 ```
 
 Create WebSocket client to call server methods over WebSocket.

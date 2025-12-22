@@ -1,7 +1,7 @@
 import type { BaseContext } from './context';
 import type { Middleware } from './middleware';
 import type { Session } from './session';
-import type { JSONObject, Promisable } from './types';
+import type { JSONValue, Promisable } from './types';
 import { UnauthorizedError } from './error';
 import { Ultra } from './ultra';
 
@@ -13,53 +13,53 @@ export interface AuthProvider<User> {
   setUser: (user: User) => Promisable<void>;
 }
 
-type AuthProviderFactory<User = any> = (context: BaseContext) => AuthProvider<User>;
+type AuthProviderFactory<User = any> = (context: AuthContext<User>) => AuthProvider<User>;
 
 interface AuthConfig<P extends Record<string, AuthProviderFactory> = Record<string, AuthProviderFactory>> {
   provider: keyof P;
   providers: P;
 }
 
-export type AuthContext<User extends JSONObject> = BaseContext & {
-  session: Session;
+export type AuthContext<User> = BaseContext & {
+  session: Session<any>;
   auth: Auth<User>;
 };
 
 export function defineConfig<
-  User extends JSONObject,
+  User,
   P extends Record<string, AuthProviderFactory<User>> = Record<string, AuthProviderFactory<User>>,
 >(config: AuthConfig<P>) {
   return config;
 }
 
 export function createAuthModule<
-  User extends JSONObject,
+  User,
   P extends Record<string, AuthProviderFactory<User>> = Record<string, AuthProviderFactory<User>>,
 >(config: AuthConfig<P>) {
-  return new Ultra().derive(context => ({ auth: new Auth<User, P>(config, context) }));
+  return new Ultra().derive(context => ({ auth: new Auth<User, P>(config, context as AuthContext<User>) }));
 }
 
-export const isAuthenticated: Middleware<unknown, unknown, AuthContext<JSONObject>> = async (options) => {
+export const isAuthenticated: Middleware<any, any, AuthContext<any>> = async (options) => {
   if (!await options.context.auth.check()) return new UnauthorizedError();
   return options.next();
 };
 
-export const isGuest: Middleware<unknown, unknown, AuthContext<JSONObject>> = async (options) => {
+export const isGuest: Middleware<any, any, AuthContext<any>> = async (options) => {
   if (await options.context.auth.check()) return new UnauthorizedError();
   return options.next();
 };
 export class Auth<
-  User extends JSONObject,
+  User,
   Providers extends Record<string, AuthProviderFactory<User>> = Record<string, AuthProviderFactory<User>>,
 > {
   protected readonly config: AuthConfig<Providers>;
-  protected readonly context: BaseContext;
+  protected readonly context: AuthContext<User>;
   protected readonly usingProvider: keyof Providers;
   protected readonly providerCache: Map<keyof Providers, AuthProvider<User>>;
 
   constructor(
     config: AuthConfig<Providers>,
-    context: BaseContext,
+    context: AuthContext<User>,
     provider: keyof Providers = config.provider,
     providerCache = new Map<keyof Providers, AuthProvider<User>>(),
   ) {
@@ -107,7 +107,7 @@ export class Auth<
 
 // ===== Build in providers =====
 
-export class SessionAuthProvider<User extends JSONObject> implements AuthProvider<User> {
+export class SessionAuthProvider<User> implements AuthProvider<User> {
   protected readonly context: AuthContext<User>;
   protected readonly sessionKey: string;
 
@@ -134,7 +134,7 @@ export class SessionAuthProvider<User extends JSONObject> implements AuthProvide
   }
 
   setUser(user: User) {
-    this.context.session.set(this.sessionKey, user);
+    this.context.session.set(this.sessionKey, user as JSONValue);
   }
 }
 
