@@ -40,7 +40,7 @@ jobs:
 
       - name: Publish to npm (Bun)
         run: |
-          bun publish --access public
+          bun publish --access public --tolerate-republish --auth-type legacy
 
       - name: Pack
         run: |
