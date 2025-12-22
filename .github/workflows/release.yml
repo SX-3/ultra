@@ -7,13 +7,19 @@ on:
 
 permissions:
   id-token: write # Required for OIDC
-  contents: read
+  contents: write
 
 jobs:
   release:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: 'https://registry.npmjs.org'
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -32,9 +38,9 @@ jobs:
         run: |
           bun run build
 
-      - name: Publish to npm (Bun)
+      - name: Publish to npm (Trusted Publishing)
         run: |
-          bun publish --access public --tolerate-republish
+          bunx npm publish --provenance
 
       - name: Pack
         run: |
