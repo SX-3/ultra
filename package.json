@@ -1,7 +1,7 @@
 {
   "name": "@sx3/ultra",
   "type": "module",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "private": false,
   "description": "Type-safe RPC over HTTP/WebSocket for Bun",
   "author": "SX3",
@@ -14,7 +14,14 @@
   "bugs": {
     "url": "https://github.com/SX-3/ultra/issues"
   },
-  "keywords": ["RPC", "HTTP", "WebSocket", "Bun", "Framework", "TypeScript"],
+  "keywords": [
+    "RPC",
+    "HTTP",
+    "WebSocket",
+    "Bun",
+    "Framework",
+    "TypeScript"
+  ],
   "sideEffects": false,
   "exports": {
     ".": {
