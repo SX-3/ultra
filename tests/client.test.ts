@@ -139,6 +139,10 @@ describe('createWebSocketClient', () => {
     listenerCount(type: string) {
       return this.listeners.get(type)?.size ?? 0;
     }
+
+    get readyState() {
+      return WebSocket.OPEN;
+    }
   }
 
   const makeClient = (options?: { timeout?: number }) => {

@@ -2,7 +2,7 @@ import type { Procedure } from './procedure';
 import type { Result } from './rpc';
 import type { ProceduresMap, Ultra } from './ultra';
 
-type GetProcedures<T> = T extends Ultra<infer P> ? P : never;
+type GetProcedures<T> = T extends Ultra<infer P, any, any> ? P : never;
 
 type BuildProcedure<P, CO> = P extends Procedure<infer I, infer O, any>
   ? (undefined extends I
@@ -52,7 +52,7 @@ interface HTTPClientOptions extends Omit<RequestInit, 'body'> {
   timeout?: number;
 }
 
-export function createHTTPClient<B extends Ultra>(clientOptions: HTTPClientOptions) {
+export function createHTTPClient<B extends Ultra<any, any, any>>(clientOptions: HTTPClientOptions) {
   const invoke: Invoke<Partial<HTTPClientOptions>> = async (method, params, callOptions) => {
     const options = { ...clientOptions, ...callOptions };
 
@@ -129,13 +129,13 @@ interface WebSocketClientOptions {
   timeout?: number;
 }
 
-export function createWebSocketClient<B extends Ultra>(options: WebSocketClientOptions) {
+export function createWebSocketClient<B extends Ultra<any, any, any>>(options: WebSocketClientOptions) {
   const { timeout = 10000 } = options;
   const makeId = () => Math.random().toString(36);
 
   const invoke: Invoke<Partial<WebSocketClientOptions>> = (method, params, callOptions) => {
     const socket = options.socket();
-    if (socket?.readyState !== WebSocket.OPEN) {
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
       return Promise.reject(new Error('WebSocket is not open'));
     }
 
@@ -174,11 +174,11 @@ export function createWebSocketClient<B extends Ultra>(options: WebSocketClientO
 
 type ClientsCallsParams = Partial<WebSocketClientOptions> | Partial<HTTPClientOptions>;
 
-interface SuperClientOptions<B extends Ultra> {
+interface SuperClientOptions<B extends Ultra<any, any, any>> {
   pick: (...args: Parameters<Invoke<ClientsCallsParams>>) => BuildClient<GetProcedures<B>, ClientsCallsParams>;
 }
 
-export function createSuperClient<B extends Ultra>(options: SuperClientOptions<B>) {
+export function createSuperClient<B extends Ultra<any, any, any>>(options: SuperClientOptions<B>) {
   const invoke: Invoke<ClientsCallsParams> = (method, params, callOptions) => {
     const client = options.pick(method, params, callOptions);
     const segments = method.split('/').filter(Boolean);
