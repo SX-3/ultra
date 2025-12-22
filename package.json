@@ -2,6 +2,7 @@
   "name": "@sx3/ultra",
   "type": "module",
   "version": "0.0.1",
+  "private": false,
   "description": "Ultra: type-safe RPC over HTTP/WebSocket for Bun",
   "author": "SX3",
   "license": "MIT",

@@ -6,7 +6,8 @@ on:
       - 'v*'
 
 permissions:
-  contents: write
+  id-token: write # Required for OIDC
+  contents: read
 
 jobs:
   release:
@@ -31,16 +32,9 @@ jobs:
         run: |
           bun run build
 
-      - name: Configure npm auth
-        run: |
-          umask 077
-          printf "//registry.npmjs.org/:_authToken=%s\n" "$NPM_CONFIG_TOKEN" > ~/.npmrc
-        env:
-          NPM_CONFIG_TOKEN: ${{ secrets.NPM_TOKEN }}
-
       - name: Publish to npm (Bun)
         run: |
-          bun publish --access public --tolerate-republish --auth-type legacy
+          bun publish --access public --tolerate-republish
 
       - name: Pack
         run: |
