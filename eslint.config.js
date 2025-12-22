@@ -16,6 +16,8 @@ export default antfu({
     overrides: {
       'import/first': ['off'],
       'prefer-const': ['off'],
+      'perfectionist/sort-imports': ['off'],
+      'import/no-duplicates': ['off'],
     },
   },
 

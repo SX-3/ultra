@@ -1,6 +1,8 @@
 import type { BaseContext } from './context';
+import type { Middleware } from './middleware';
 import type { Session } from './session';
 import type { JSONObject, Promisable } from './types';
+import { UnauthorizedError } from './error';
 import { Ultra } from './ultra';
 
 export interface AuthProvider<User> {
@@ -37,6 +39,15 @@ export function createAuthModule<
   return new Ultra().derive(context => ({ auth: new Auth<User, P>(config, context) }));
 }
 
+export const isAuthenticated: Middleware<unknown, unknown, AuthContext<JSONObject>> = async (options) => {
+  if (!await options.context.auth.check()) return new UnauthorizedError();
+  return options.next();
+};
+
+export const isGuest: Middleware<unknown, unknown, AuthContext<JSONObject>> = async (options) => {
+  if (await options.context.auth.check()) return new UnauthorizedError();
+  return options.next();
+};
 export class Auth<
   User extends JSONObject,
   Providers extends Record<string, AuthProviderFactory<User>> = Record<string, AuthProviderFactory<User>>,

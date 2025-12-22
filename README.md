@@ -442,7 +442,15 @@ export const session = createSessionModule(config);
 import { Ultra } from '@sx3/ultra';
 import { session } from './session';
 
-const app = new Ultra().use(session);
+const app = new Ultra().use(session).routes(input => ({
+  profile: {
+    get: input().http().handler(({ context: { session } }) => {
+      // Access session data
+      session.get('user');
+      session.set('user', { id: 1, name: 'Alice' });
+    }),
+  },
+})).start();
 ```
 
 ### Authentication
@@ -466,15 +474,38 @@ const config = defineConfig<User>({
   },
 });
 
-export const auth = createAuthModule(config);
+export const auth = createAuthModule<User>(config);
 
 // server.ts
 import { auth } from './auth';
 import { session } from './session';
+import { isAuthenticated, isGuest } from '@sx3/ultra/auth';
 
 const app = new Ultra()
   .use(session)
   .use(auth)
+  .routes(input => ({
+    // Just example
+    auth: {
+      login: input(LoginSchema)
+        .output(UserSchema)
+        .http()
+        .use(isGuest)
+        .handler(async ({ input, context }) => {
+          // ... check credentials logic
+          // then
+          await context.auth.login(user);
+          return user;
+        }),
+
+      logout: input()
+        .http()
+        .use(isAuthenticated)
+        .handler(({ context }) => context.auth.logout()),
+
+      profile: input().use(isAuthenticated).http().handler(({ context }) => context.auth.user!),
+    }
+  }))
   .start();
 ```
 
