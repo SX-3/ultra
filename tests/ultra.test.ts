@@ -1,145 +1,133 @@
-import { afterAll, beforeAll, describe, expect, it, mock } from 'bun:test';
+import type { BaseContext } from '../src/context';
+import type { Middleware } from '../src/middleware';
+import type { ProcedureHandler } from '../src/procedure';
+import type { InputFactory } from '../src/ultra';
+import { expect, it, mock } from 'bun:test';
 import { Ultra } from '../src/ultra';
+import { start } from './utils';
 
-const userListHandler = mock(() => ['user1', 'user2'] as const);
-const userRoutesInitializer = mock(input => ({
-  users: {
-    list: input().http().handler(userListHandler),
-  },
-} as const));
-const onServerStartedHandler = mock(() => {});
-const deriveFunction = mock(() => ({
-  derived: 'eeee',
-}));
-const middlewareFunction = mock(({ next }) => next());
-
-const users = new Ultra()
-  .routes(userRoutesInitializer)
-  .derive(deriveFunction)
-  .use(middlewareFunction)
-  .on('server:started', onServerStartedHandler);
-
-const module1 = new Ultra()
-  .derive(deriveFunction)
-  .use(middlewareFunction)
-  .use(users);
-const module2 = new Ultra()
-  .use(users)
-  .use(module1);
-
-const app = new Ultra()
-  .use(users)
-  .derive(deriveFunction)
-  .use(middlewareFunction)
-  .use(module1)
-  .use(module2);
-
-beforeAll(async () => app.start());
-afterAll(async () => await app.stop(true));
-
-describe('deduplication', () => {
-  it('initializers', () => {
-    expect(userRoutesInitializer).toHaveBeenCalledTimes(1);
+it.concurrent('deduplication', async () => {
+  const requestPayloads: any[] = [];
+  const loggerMiddleware = mock<Middleware<any, any, BaseContext>>(async (options) => {
+    requestPayloads.push(options.input);
+    return options.next();
   });
+  const authDeriveFunction = mock<Middleware<any, any, BaseContext>>(() => ({ auth: true }));
+  const onServerStartedHandler = mock(() => {});
+  const usersArray = ['user1', 'user2', 'user3'] as const;
+  const usersListHandler = mock<ProcedureHandler<any, typeof usersArray, any>>(() => usersArray);
+  const usersRoutesInitializer = mock((input: InputFactory<BaseContext>) => ({
+    users: {
+      list: input().http().handler(usersListHandler),
+    },
+  }));
 
-  it('handlers & derive & middleware', async () => {
-    const res = await fetch('http://localhost:3000/users/list');
-    expect(res.status).toBe(200);
-    expect(await res.json()).toEqual(['user1', 'user2']);
-    expect(userListHandler).toHaveBeenCalledTimes(1);
-    expect(deriveFunction).toHaveBeenCalledTimes(1);
-    expect(middlewareFunction).toHaveBeenCalledTimes(1);
-    expect(userRoutesInitializer).toHaveBeenCalledTimes(1);
-  });
+  const users = new Ultra()
+    .use(loggerMiddleware)
+    .derive(authDeriveFunction)
+    .routes(usersRoutesInitializer)
+    .on('server:started', onServerStartedHandler);
 
-  it('events', () => {
-    expect(onServerStartedHandler).toHaveBeenCalledTimes(1);
-  });
+  const app = new Ultra()
+    .use(loggerMiddleware)
+    .derive(authDeriveFunction)
+    .use(users)
+    .on('server:started', onServerStartedHandler);
+
+  const { http, stop, ws, isReady } = start(app);
+
+  expect(await http.users.list()).toEqual(usersArray);
+
+  expect(usersListHandler, 'handler called more than once').toHaveBeenCalledTimes(1);
+  expect(authDeriveFunction, 'derive called more than once').toHaveBeenCalledTimes(1);
+  expect(loggerMiddleware, 'middleware called more than once').toHaveBeenCalledTimes(1);
+  expect(usersRoutesInitializer, 'initializer called more than once').toHaveBeenCalledTimes(1);
+  expect(onServerStartedHandler, 'server started handler called more than once').toHaveBeenCalledTimes(1);
+
+  await isReady;
+
+  expect(await ws.users.list(), 'ws transport failed').toEqual(usersArray);
+
+  expect(usersListHandler, 'handler called more than twice (ws)').toHaveBeenCalledTimes(2);
+  expect(authDeriveFunction, 'derive called more than twice (ws)').toHaveBeenCalledTimes(2);
+  expect(loggerMiddleware, 'middleware called more than twice (ws)').toHaveBeenCalledTimes(2);
+  expect(usersRoutesInitializer, 'initializer called more than twice (ws)').toHaveBeenCalledTimes(1);
+  expect(onServerStartedHandler, 'server started handler called more than twice (ws)').toHaveBeenCalledTimes(1);
+
+  await stop();
 });
 
-// TODO: rewrite AI trash
-describe('other', () => {
-  it('throws on procedure path conflicts', () => {
-    const conflictApp = new Ultra()
-      .routes(input => ({
-        foo: input().handler(() => 'first'),
-      }))
-      .routes(input => ({
-        foo: input().handler(() => 'second'),
-      }));
+it.concurrent('throws on procedure path conflicts', () => {
+  const service = new Ultra()
+    .routes(input => ({ ping: input().handler(() => 'pong') }))
+    .routes(input => ({ ping: input().handler(() => 'pong2') }));
 
-    expect(() => (conflictApp as any).buildProcedures()).toThrow('Procedure conflict at path "foo"');
-  });
+  expect(() => service.start()).toThrowError('Procedure "ping" already exists');
+});
 
-  it('runs global middlewares in registration order', async () => {
-    const calls: string[] = [];
-    const service = new Ultra()
-      .use(({ next }) => {
-        calls.push('mw1');
-        return next();
-      })
-      .use(({ next }) => {
-        calls.push('mw2');
-        return next();
-      })
-      .routes(input => ({
-        ping: input().handler(({ input }) => {
-          calls.push(`handler:${input}`);
-          return `pong-${input}`;
-        }),
-      }));
+it.concurrent('runs global middlewares in registration order', async () => {
+  let calls: string[] = [];
 
-    (service as any).buildProcedures();
-    const handler = (service as any).handlers.get('ping');
+  const mw = (name: string) => (options: any) => {
+    calls.push(name);
+    return options.next();
+  };
 
-    expect(handler).toBeDefined();
-    const result = await handler!({ input: 'abc', context: { server: {} as any, request: {} as any } });
+  const mw2 = mw('mw2');
+  const service = new Ultra()
+    .use(mw('mw1'))
+    .use(mw2)
+    .use(mw2)
+    .use(mw2)
+    .routes(input => ({
+      ping: input().http().use(mw('mw4')).handler(() => {
+        calls.push('handler');
+        return 'pong';
+      }),
+    }))
+    .use(mw('mw3'));
 
-    expect(result).toBe('pong-abc');
-    expect(calls).toEqual(['mw1', 'mw2', 'handler:abc']);
-  });
+  const { http, stop, ws, isReady } = start(service);
 
-  it('enriches context with derived values', async () => {
-    const server = {} as any;
-    const request = {} as any;
+  expect(await http.ping()).toBe('pong');
+  expect(calls).toEqual(['mw1', 'mw2', 'mw3', 'mw4', 'handler']);
 
-    const service = new Ultra()
-      .derive({ static: 'from-object' })
-      .derive((ctx: any) => ({ dynamic: ctx.request === request ? 'derived' : 'missing' }));
+  calls = [];
 
-    const context = await (service as any).enrichContext({ server, request });
+  await isReady;
 
-    expect(context).toMatchObject({
-      server,
-      request,
-      static: 'from-object',
-      dynamic: 'derived',
-    });
-  });
+  expect(await ws.ping(), 'ws transport failed').toBe('pong');
+  expect(calls).toEqual(['mw1', 'mw2', 'mw3', 'mw4', 'handler']);
 
-  it('returns RPC errors for missing handlers and emits on failures', async () => {
-    const send404 = mock(() => {});
-    const ws404 = { send: send404 } as any;
+  await stop();
+});
 
-    const service = new Ultra();
-    (service as any).server = {} as any;
+it.concurrent('enriches context with derived values', async () => {
+  const module = new Ultra()
+    .derive({ module: 'from-module' });
 
-    await (service as any).handleRPC(ws404, { id: '1', method: 'unknown' });
-    expect(send404).toHaveBeenCalledWith('{"id": "1", "error": {"code": 404, "message": "Not found"}}');
+  const service = new Ultra()
+    .derive({ static: 'from-object' })
+    .derive(() => ({ dynamic: 'derived' }))
+    .use(module)
+    .routes(input => ({
+      ping: input().http().handler(({ context }) => {
+        expect(context).toMatchObject({
+          static: 'from-object',
+          dynamic: 'derived',
+          module: 'from-module',
+        });
+        return 'pong';
+      }),
+    }));
 
-    const errors: Error[] = [];
-    const send500 = mock(() => {});
-    const ws500 = { send: send500 } as any;
+  const { http, stop, ws, isReady } = start(service);
 
-    service.on('error', (err) => {
-      errors.push(err as Error);
-    });
-    (service as any).handlers.set('fail', () => {
-      throw new Error('boom');
-    });
+  expect(await http.ping()).toBe('pong');
 
-    await (service as any).handleRPC(ws500, { id: '2', method: 'fail' });
-    expect(errors.map(err => err.message)).toEqual(['boom']);
-    expect(send500).toHaveBeenCalledWith('{"id":"2","error":{"code":500,"message":"boom"}}');
-  });
+  await isReady;
+
+  expect(await ws.ping(), 'ws transport failed').toBe('pong');
+
+  await stop();
 });

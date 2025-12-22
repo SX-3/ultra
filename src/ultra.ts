@@ -31,18 +31,18 @@ interface ServerEventMap<SocketData extends DefaultSocketData = DefaultSocketDat
 
 type ServerEventListener<K extends keyof ServerEventMap> = (...args: ServerEventMap[K]) => any;
 
-type DeriveFunction<C extends BaseContext> = (context: C) => Promisable<Record<PropertyKey, any>>;
-type DeriveValue<C extends BaseContext> = DeriveFunction<C> | Record<PropertyKey, any>;
-type ExtractDerive<C extends BaseContext, T extends DeriveValue<C>> = T extends DeriveFunction<C> ? Awaited<ReturnType<T>> : T;
+type DeriveFunction<C> = (context: C) => Promisable<Record<PropertyKey, any>>;
+type DeriveValue<C> = DeriveFunction<C> | Record<PropertyKey, any>;
+type ExtractDerive<C, T extends DeriveValue<C>> = T extends (...args: any[]) => any ? Awaited<ReturnType<T>> : T;
 
 type StartOptions<SocketData extends DefaultSocketData> = Omit<Partial<Bun.Serve.Options<SocketData>>, 'websocket' | 'error' | 'routes'>;
 
-interface UltraOptions {
+export interface UltraOptions {
   http: boolean;
 }
 
-type InputFactory<C extends BaseContext> = <I>(schema?: Schema<I>) => Procedure<I, unknown, C>;
-type ProcedureMapInitializer<R extends ProceduresMap, C extends BaseContext = BaseContext> = (input: InputFactory<C>) => R;
+export type InputFactory<C extends BaseContext> = <I>(schema?: Schema<I>) => Procedure<I, unknown, C>;
+export type ProcedureMapInitializer<R extends ProceduresMap, C extends BaseContext = BaseContext> = (input: InputFactory<C>) => R;
 
 export class Ultra<
   Procedures extends ProceduresMap = ProceduresMap,
@@ -266,7 +266,7 @@ export class Ultra<
         const { path, value } = stack.pop()!;
 
         if (value instanceof Procedure) {
-          if (procedures.has(path)) throw new Error(`Procedure conflict at path "${path}"`);
+          if (procedures.has(path)) throw new Error(`Procedure "${path}" already exists`);
           procedures.set(path, value as Procedure<any, any, Context>);
           this.handlers.set(path, this.wrapHandler(value.wrap()));
           continue;
@@ -299,10 +299,8 @@ export class Ultra<
         this.emit('http:request', request, server);
         let input: any = request.body;
 
-        const baseContext = { server, request } as any;
-        const context = this.derived.size
-          ? await this.enrichContext(baseContext)
-          : (baseContext as Context);
+        const baseContext = { server, request } as Context;
+        const context = this.derived.size ? await this.enrichContext(baseContext) : baseContext;
 
         // Parse input if procedure has input schema
         if (input && procedureInfo.hasInput) {
