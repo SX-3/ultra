@@ -221,7 +221,6 @@ export function createSessionModule<S extends Record<string, SessionStoreFactory
       return response;
     });
 }
-
 ```
 
 You can add a static value for each request:
@@ -260,7 +259,6 @@ auth.start();
 const main = new Ultra()
   .use(auth)
   .start();
-
 ```
 
 You can use modules as many times as you like.
@@ -280,7 +278,6 @@ const mainApp = new Ultra()
   .use(moduleB)
   .use(moduleC)
   .start();
-
 ```
 
 It may seem like modules will be duplicated and cause conflicts, but Ultra, under the hood, deduplicates everything that is connected to it.
@@ -406,7 +403,6 @@ const cors = createCORSMiddleware({
 });
 
 const app = new Ultra().use(cors); // Apply CORS middleware globally
-
 ```
 
 ### Sessions
