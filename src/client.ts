@@ -125,7 +125,7 @@ export function createHTTPClient<B extends Ultra>(clientOptions: HTTPClientOptio
 }
 
 interface WebSocketClientOptions {
-  socket: () => WebSocket;
+  socket: () => WebSocket | null;
   timeout?: number;
 }
 
@@ -135,8 +135,7 @@ export function createWebSocketClient<B extends Ultra>(options: WebSocketClientO
 
   const invoke: Invoke<Partial<WebSocketClientOptions>> = (method, params, callOptions) => {
     const socket = options.socket();
-    const readyState = (socket as unknown as { readyState?: unknown }).readyState;
-    if (typeof readyState === 'number' && readyState !== WebSocket.OPEN) {
+    if (socket?.readyState !== WebSocket.OPEN) {
       return Promise.reject(new Error('WebSocket is not open'));
     }
 
