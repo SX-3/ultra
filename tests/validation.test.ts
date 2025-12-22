@@ -1,9 +1,9 @@
-import type { StandardSchemaV1 } from '../src/validation';
-import { describe, expect, it } from 'bun:test';
-import { ValidationError } from '../src/error';
-import { validate } from '../src/validation';
+import type { Result, StandardSchemaV1 } from '../src/validation';
+import { describe, expect, expectTypeOf, it } from 'bun:test';
+import { Ultra } from '../src/ultra';
+import { start } from './utils';
 
-function makeSchema<I, O>(validateFn: StandardSchemaV1<I, O>['~standard']['validate']): StandardSchemaV1<I, O> {
+function makeSchema<O>(validateFn: (input: unknown) => Result<O>): StandardSchemaV1<O> {
   return {
     '~standard': {
       version: 1,
@@ -13,24 +13,55 @@ function makeSchema<I, O>(validateFn: StandardSchemaV1<I, O>['~standard']['valid
   };
 }
 
-describe('validate', () => {
-  it('returns validated output when schema succeeds', async () => {
-    const schema = makeSchema<string, number>(value => ({ value: Number(value) + 1 }));
+const LoginSchema = makeSchema<{ username: string; password: string }>((value) => {
+  if (typeof value === 'object' && value !== null && 'username' in value && 'password' in value) {
+    return { value: value as { username: string; password: string } };
+  }
+  return { issues: [{ message: 'Invalid login data' }] };
+});
 
-    await expect(validate(schema, '2')).resolves.toBe(3);
-  });
+const UserSchema = makeSchema<{ username: string; id: number }>((value) => {
+  if (typeof value === 'object' && value !== null && 'username' in value && 'id' in value) {
+    return { value: value as { username: string; id: number } };
+  }
+  return { issues: [{ message: 'Invalid user data' }] };
+});
 
-  it('handles async validators', async () => {
-    const schema = makeSchema<number, string>(async value => ({ value: `n:${value}` }));
+const app = new Ultra().routes(input => ({
+  auth: {
+    login: input(LoginSchema)
+      .output(UserSchema)
+      .http()
+      .handler(({ input }) => {
+        expect(input).toContainAllKeys(['username', 'password']);
+        expectTypeOf(input).toEqualTypeOf<{ username: string; password: string }>();
+        return { username: input.username, id: 1 };
+      }),
+  },
+}));
 
-    await expect(validate(schema, 7)).resolves.toBe('n:7');
+describe('validate', async () => {
+  const { http, ws, isReady } = start(app);
+  await isReady;
+
+  it('returns validated output', async () => {
+    const data = { username: 'test', password: 'secret' };
+    const [userHTTP, userWS] = await Promise.all([
+      http.auth.login(data),
+      ws.auth.login(data),
+    ]);
+
+    expect(userHTTP).toEqual({ username: 'test', id: 1 });
+    expectTypeOf(userHTTP).toExtend<{ username: string; id: number }>();
+    expect(userWS).toEqual({ username: 'test', id: 1 });
+    expectTypeOf(userWS).toExtend<{ username: string; id: number }>();
   });
 
   it('throws ValidationError with formatted issues when validation fails', async () => {
-    const schema = makeSchema<string, never>(() => ({ issues: [{ message: 'bad input', path: ['field'] }] }));
-    const validation = validate(schema, 'oops');
-
-    await expect(validation).rejects.toThrow(ValidationError);
-    await expect(validation).rejects.toThrow('[\n  {\n    "message": "bad input",\n    "path": [\n      "field"\n    ]\n  }\n]');
+    const invalidData = { username: 'test' }; // Missing password
+    // @ts-expect-error Testing invalid input
+    expect(http.auth.login(invalidData)).rejects.toThrow();
+    // @ts-expect-error Testing invalid input
+    expect(ws.auth.login(invalidData)).rejects.toThrow();
   });
 });
