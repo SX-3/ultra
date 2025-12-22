@@ -56,6 +56,10 @@ export interface SessionSocketData {
   sessionId: string;
 }
 
+export type SessionContext = BaseContext<{ sessionId: string }> & {
+  session: Session<any>;
+};
+
 export function defineConfig<S extends Record<string, SessionStoreFactory>>(config: SessionConfig<S>): SessionConfig<S> {
   return {
     ...config,
@@ -73,7 +77,7 @@ export function defineConfig<S extends Record<string, SessionStoreFactory>>(conf
 /** Extends context and socket data, initiate session instance every request */
 export function createSessionModule<S extends Record<string, SessionStoreFactory>>(config: SessionConfig<S>) {
   return new Ultra()
-    .deriveWS((context: HTTPContext) => ({ sessionId: Session.getOrCreateId(context.request, config) }))
+    .deriveWS((context: BaseContext) => ({ sessionId: Session.getOrCreateId((context as HTTPContext).request, config) }))
     .derive(context => ({ session: new Session(config, context) }))
     .use(async ({ context, next }) => {
       await context.session.initiate();

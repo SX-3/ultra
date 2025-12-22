@@ -1,9 +1,8 @@
 import type { BaseContext } from './context';
 import type { Middleware } from './middleware';
-import type { Session } from './session';
+import type { Session, SessionContext } from './session';
 import type { JSONValue, Promisable } from './types';
 import { UnauthorizedError } from './error';
-import { Ultra } from './ultra';
 
 export interface AuthProvider<User> {
   user: User | null;
@@ -13,7 +12,7 @@ export interface AuthProvider<User> {
   setUser: (user: User) => Promisable<void>;
 }
 
-type AuthProviderFactory<User = any> = (context: AuthContext<User>) => AuthProvider<User>;
+type AuthProviderFactory<User = any> = (context: SessionContext) => AuthProvider<User>;
 
 interface AuthConfig<P extends Record<string, AuthProviderFactory> = Record<string, AuthProviderFactory>> {
   provider: keyof P;
@@ -32,13 +31,6 @@ export function defineConfig<
   return config;
 }
 
-export function createAuthModule<
-  User,
-  P extends Record<string, AuthProviderFactory<User>> = Record<string, AuthProviderFactory<User>>,
->(config: AuthConfig<P>) {
-  return new Ultra().derive(context => ({ auth: new Auth<User, P>(config, context as AuthContext<User>) }));
-}
-
 export const isAuthenticated: Middleware<any, any, AuthContext<any>> = async (options) => {
   if (!await options.context.auth.check()) return new UnauthorizedError();
   return options.next();
@@ -53,13 +45,13 @@ export class Auth<
   Providers extends Record<string, AuthProviderFactory<User>> = Record<string, AuthProviderFactory<User>>,
 > {
   protected readonly config: AuthConfig<Providers>;
-  protected readonly context: AuthContext<User>;
+  protected readonly context: SessionContext;
   protected readonly usingProvider: keyof Providers;
   protected readonly providerCache: Map<keyof Providers, AuthProvider<User>>;
 
   constructor(
     config: AuthConfig<Providers>,
-    context: AuthContext<User>,
+    context: SessionContext,
     provider: keyof Providers = config.provider,
     providerCache = new Map<keyof Providers, AuthProvider<User>>(),
   ) {
@@ -97,7 +89,7 @@ export class Auth<
     const cached = this.providerCache.get(this.usingProvider);
     if (cached) return cached;
 
-    const providerFactory = this.config.providers[this.usingProvider];
+    const providerFactory = this.config.providers[this.usingProvider]!;
     if (!providerFactory) throw new Error(`Auth provider "${String(this.usingProvider)}" is not configured.`);
     const instance = providerFactory(this.context);
     this.providerCache.set(this.usingProvider, instance);
@@ -108,10 +100,10 @@ export class Auth<
 // ===== Build in providers =====
 
 export class SessionAuthProvider<User> implements AuthProvider<User> {
-  protected readonly context: AuthContext<User>;
+  protected readonly context: SessionContext;
   protected readonly sessionKey: string;
 
-  constructor(context: AuthContext<User>, sessionKey = 'user') {
+  constructor(context: SessionContext, sessionKey = 'user') {
     this.context = context;
     this.sessionKey = sessionKey;
   }

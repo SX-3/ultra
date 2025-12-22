@@ -12,7 +12,7 @@ export interface WSContext<SocketData> {
   ws: ServerWebSocket<SocketData>;
 }
 
-export type BaseContext<SocketData extends DefaultSocketData = DefaultSocketData> = HTTPContext | WSContext<SocketData>;
+export type BaseContext<SocketData extends DefaultSocketData = any> = HTTPContext | WSContext<SocketData>;
 
 export function isHTTP(context: BaseContext): context is HTTPContext {
   return 'request' in context;
