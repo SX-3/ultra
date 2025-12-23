@@ -17,7 +17,7 @@ export interface HTTPOptions {
   method?: HTTPMethod;
 }
 
-export class Procedure<I = any, O = any, C extends BaseContext = BaseContext> {
+export class Procedure<I = unknown, O = unknown, C extends BaseContext = BaseContext> {
   protected inputSchema?: Schema<I>;
   protected outputSchema?: Schema<O>;
   protected handlerFunction?: ProcedureHandler<I, O, C>;
@@ -35,14 +35,14 @@ export class Procedure<I = any, O = any, C extends BaseContext = BaseContext> {
   }
 
   handler<const ActualOutput>(
-    handler: ProcedureHandler<I, ActualOutput, C>,
-  ): Procedure<I, ActualOutput, C> {
+    handler: ProcedureHandler<I, unknown extends O ? ActualOutput : O, C>,
+  ): Procedure<I, unknown extends O ? ActualOutput : O, C> {
     this.handlerFunction = handler as any;
-    return this as unknown as Procedure<I, ActualOutput, C>;
+    return this as unknown as Procedure<I, unknown extends O ? ActualOutput : O, C>;
   }
 
-  http(options?: { method?: HTTPMethod }): Procedure<I, O, C> {
-    this.httpOptions = { ...options, enabled: true };
+  http(options?: HTTPOptions): Procedure<I, O, C> {
+    this.httpOptions = { enabled: true, ...options };
     return this;
   }
 

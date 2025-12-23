@@ -45,7 +45,7 @@
   "scripts": {
     "build": "tsdown",
     "dev": "tsdown --watch",
-    "test": "bun test",
+    "test": "bun test && bunx tsc --noEmit",
     "lint": "eslint ."
   },
   "peerDependencies": {

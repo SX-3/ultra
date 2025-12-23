@@ -37,10 +37,6 @@ type ExtractDerive<C, T extends DeriveValue<C>> = T extends (...args: any[]) => 
 
 type StartOptions<SocketData extends DefaultSocketData> = Omit<Partial<Bun.Serve.Options<SocketData>>, 'websocket' | 'error' | 'routes'>;
 
-export interface UltraOptions {
-  http: boolean;
-}
-
 export type InputFactory<C extends BaseContext> = <I>(schema?: Schema<I>) => Procedure<I, unknown, C>;
 export type ProcedureMapInitializer<R extends ProceduresMap, C extends BaseContext = BaseContext> = (input: InputFactory<C>) => R;
 
@@ -55,15 +51,11 @@ export class Ultra<
   protected readonly middlewares = new Set<Middleware<any, any, Context>>();
   protected readonly derived = new Set<DeriveValue<Context>>();
   protected readonly derivedWS = new Set<DeriveValue<Context>>();
-  protected readonly options: UltraOptions = {
-    http: true,
+  protected readonly options = {
+    httpEnabled: false,
   };
 
   protected server?: Server<SocketData>;
-
-  constructor(options?: Partial<UltraOptions>) {
-    Object.assign(this.options, options);
-  }
 
   /** Register procedures */
   routes<const P extends ProceduresMap>(initializer: ProcedureMapInitializer<P, Context>): Ultra<Procedures & P, Context, SocketData> {
@@ -103,7 +95,7 @@ export class Ultra<
   start(options?: StartOptions<SocketData>) {
     if (this.server) {
       console.warn('Server is already running');
-      return this.server;
+      return this;
     }
 
     const procedures = this.buildProcedures();
@@ -113,7 +105,7 @@ export class Ultra<
     this.server = serve<SocketData>({
       ...(options ?? {}),
       routes: {
-        ...(this.options.http && {
+        ...(this.options.httpEnabled && {
           ...this.buildRoutes(procedures),
           '/*': async (request, server) => {
             this.emit('http:request', request, server);
@@ -126,6 +118,7 @@ export class Ultra<
           },
         }),
         '/ws': async (request, server) => {
+          this.emit('http:request', request, server);
           if (this.derivedWS.size) {
             const data = {} as SocketData;
             const context = this.derived.size ? await this.enrichContext({ server, request }) : ({ server, request } as Context);
@@ -160,7 +153,7 @@ export class Ultra<
     } as Bun.Serve.Options<SocketData>);
 
     this.emit('server:started', this.server);
-    return this.server;
+    return this;
   }
 
   async stop(closeActiveConnections = false) {
@@ -267,6 +260,9 @@ export class Ultra<
 
         if (value instanceof Procedure) {
           if (procedures.has(path)) throw new Error(`Procedure "${path}" already exists`);
+
+          if (!this.options.httpEnabled && value.getInfo()?.http?.enabled) this.options.httpEnabled = true;
+
           procedures.set(path, value as Procedure<any, any, Context>);
           this.handlers.set(path, this.wrapHandler(value.wrap()));
           continue;
@@ -302,8 +298,7 @@ export class Ultra<
         const baseContext = { server, request } as Context;
         const context = this.derived.size ? await this.enrichContext(baseContext) : baseContext;
 
-        // Parse input if procedure has input schema
-        if (input && procedureInfo.hasInput) {
+        if (input) {
           // Parse GET with query parameters
           if (request.method === 'GET') {
             const query = request.url.indexOf('?');

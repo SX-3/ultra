@@ -1,17 +1,6 @@
-import type { Result, StandardSchemaV1 } from '../src/validation';
 import { describe, expect, expectTypeOf, it } from 'bun:test';
 import { Ultra } from '../src/ultra';
-import { start } from './utils';
-
-function makeSchema<O>(validateFn: (input: unknown) => Result<O>): StandardSchemaV1<O> {
-  return {
-    '~standard': {
-      version: 1,
-      vendor: 'unit-test',
-      validate: validateFn,
-    },
-  };
-}
+import { makeSchema, start } from './utils';
 
 const LoginSchema = makeSchema<{ username: string; password: string }>((value) => {
   if (typeof value === 'object' && value !== null && 'username' in value && 'password' in value) {
