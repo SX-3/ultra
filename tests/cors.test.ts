@@ -1,35 +1,28 @@
-import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
+import { describe, expect, it } from 'bun:test';
 import { createCORSMiddleware } from '../src/cors';
 import { Ultra } from '../src/ultra';
+import { start } from './utils';
 
-const PORT = 3001;
-const ALLOWED_ORIGIN = 'https://allowed.com';
-const DISALLOWED_ORIGIN = 'https://other.com';
-
+const ORIGINS = ['http://allowed.com', 'http://also-allowed.com'];
 const app = new Ultra()
   .use(createCORSMiddleware({
-    origin: [ALLOWED_ORIGIN],
-    methods: ['GET'],
+    origin: ORIGINS,
+    methods: ['GET', 'POST'],
     allowedHeaders: ['X-Test'],
     exposedHeaders: ['X-Expose'],
     credentials: true,
     maxAge: 99,
   }))
   .routes(input => ({
-    ping: input().http({ method: 'GET' }).handler(() => ({ pong: true })),
+    ping: input().http().handler(() => 'pong'),
   }));
 
-beforeAll(async () => {
-  await app.start({ port: PORT });
-});
+describe('CORS middleware integration', async () => {
+  const { url } = start(app);
 
-afterAll(async () => {
-  await app.stop(true);
-});
-
-describe('CORS middleware integration', () => {
   it('responds to preflight with configured headers for allowed origin', async () => {
-    const res = await fetch(`http://localhost:${PORT}/ping`, {
+    const ALLOWED_ORIGIN = ORIGINS[0]!;
+    const res = await fetch(`${url}/ping`, {
       method: 'OPTIONS',
       headers: {
         Origin: ALLOWED_ORIGIN,
@@ -38,7 +31,7 @@ describe('CORS middleware integration', () => {
 
     expect(res.status).toBe(204);
     expect(res.headers.get('Access-Control-Allow-Origin')).toBe(ALLOWED_ORIGIN);
-    expect(res.headers.get('Access-Control-Allow-Methods')).toBe('GET');
+    expect(res.headers.get('Access-Control-Allow-Methods')).toBe('GET, POST');
     expect(res.headers.get('Access-Control-Allow-Headers')).toBe('X-Test');
     expect(res.headers.get('Access-Control-Expose-Headers')).toBe('X-Expose');
     expect(res.headers.get('Access-Control-Allow-Credentials')).toBe('true');
@@ -46,7 +39,8 @@ describe('CORS middleware integration', () => {
   });
 
   it('attaches CORS headers to actual responses for allowed origin', async () => {
-    const res = await fetch(`http://localhost:${PORT}/ping`, {
+    const ALLOWED_ORIGIN = ORIGINS[1]!;
+    const res = await fetch(`${url}/ping`, {
       method: 'GET',
       headers: {
         Origin: ALLOWED_ORIGIN,
@@ -54,9 +48,9 @@ describe('CORS middleware integration', () => {
     });
 
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ pong: true });
+    expect(await res.text()).toEqual('pong');
     expect(res.headers.get('Access-Control-Allow-Origin')).toBe(ALLOWED_ORIGIN);
-    expect(res.headers.get('Access-Control-Allow-Methods')).toBe('GET');
+    expect(res.headers.get('Access-Control-Allow-Methods')).toBe('GET, POST');
     expect(res.headers.get('Access-Control-Allow-Headers')).toBe('X-Test');
     expect(res.headers.get('Access-Control-Expose-Headers')).toBe('X-Expose');
     expect(res.headers.get('Access-Control-Allow-Credentials')).toBe('true');
@@ -64,7 +58,8 @@ describe('CORS middleware integration', () => {
   });
 
   it('passes through without CORS headers for disallowed origin', async () => {
-    const res = await fetch(`http://localhost:${PORT}/ping`, {
+    const DISALLOWED_ORIGIN = 'http://disallowed.com';
+    const res = await fetch(`${url}/ping`, {
       method: 'GET',
       headers: {
         Origin: DISALLOWED_ORIGIN,
@@ -72,7 +67,16 @@ describe('CORS middleware integration', () => {
     });
 
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ pong: true });
+    expect(await res.text()).toEqual('pong');
+    expect(res.headers.get('Access-Control-Allow-Origin')).toBeNull();
+  });
+
+  it('passes through without CORS headers when no Origin header is present', async () => {
+    const res = await fetch(`${url}/ping`, {
+      method: 'GET',
+    });
+    expect(res.status).toBe(200);
+    expect(await res.text()).toEqual('pong');
     expect(res.headers.get('Access-Control-Allow-Origin')).toBeNull();
   });
 });

@@ -34,6 +34,7 @@ export function start<T extends Ultra<any, any, any>>(app: T, port = portCounter
   socket.addEventListener('open', resolve);
   sockets.add(socket);
   return {
+    url: instance.url.toString(),
     port,
     http: createHTTPClient<T>({
       baseUrl: `http://localhost:${port}`,

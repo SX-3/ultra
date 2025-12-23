@@ -95,7 +95,7 @@ export class Ultra<
   start(options?: StartOptions<SocketData>) {
     if (this.server) {
       console.warn('Server is already running');
-      return this;
+      return this.server;
     }
 
     const procedures = this.buildProcedures();
@@ -153,7 +153,7 @@ export class Ultra<
     } as Bun.Serve.Options<SocketData>);
 
     this.emit('server:started', this.server);
-    return this;
+    return this.server;
   }
 
   async stop(closeActiveConnections = false) {
