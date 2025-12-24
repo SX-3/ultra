@@ -105,6 +105,8 @@ export function createHTTPClient<U extends Ultra<any, any, any>>(clientOptions: 
       if (!response.ok) throw new Error(`HTTP error: ${response.statusText} ${response.status} `);
       const type = response.headers.get('Content-Type') || '';
       switch (true) {
+        case response.status === 204:
+          return null;
         case type.startsWith('application/json'):
           return await response.json();
         case type.startsWith('text/'):

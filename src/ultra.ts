@@ -1,10 +1,9 @@
 import type { BunRequest, ErrorLike, Server, ServerWebSocket } from 'bun';
-import type { BaseContext, DefaultSocketData } from './context';
+import type { BaseContext, DeriveUpgradeValue, DeriveValue, ExtractDerive, ExtractDeriveUpgradeData, RebindSocketData } from './context';
 import type { BunRouteHandler, BunRoutes } from './http';
 import type { Middleware } from './middleware';
 import type { ProcedureHandler, ProcedureOptions } from './procedure';
 import type { Payload } from './rpc';
-import type { Promisable } from './types';
 import type { StandardSchemaV1 as Schema } from './validation';
 import { serve } from 'bun';
 import { Procedure } from './procedure';
@@ -15,50 +14,44 @@ export interface ProceduresMap {
   [key: string]: Procedure<any, any, any> | ProceduresMap;
 }
 
-interface ServerEventMap<SocketData extends DefaultSocketData = DefaultSocketData> {
+interface ServerEventMap<SD> {
   'error': [ErrorLike];
   'unhandled:error': [ErrorLike];
 
-  'http:request': [BunRequest, Server<SocketData>];
+  'http:request': [BunRequest, Server<SD>];
 
-  'ws:open': [ServerWebSocket<SocketData>];
-  'ws:message': [ServerWebSocket<SocketData>, string | Buffer<ArrayBuffer>];
-  'ws:close': [ServerWebSocket<SocketData>, number, string];
+  'ws:open': [ServerWebSocket<SD>];
+  'ws:message': [ServerWebSocket<SD>, string | Buffer<ArrayBuffer>];
+  'ws:close': [ServerWebSocket<SD>, number, string];
 
-  'server:started': [Server<SocketData>];
-  'server:stopped': [Server<SocketData>, closeActiveConnections: boolean];
+  'server:started': [Server<SD>];
+  'server:stopped': [Server<SD>, closeActiveConnections: boolean];
 }
 
-type ServerEventListener<K extends keyof ServerEventMap> = (...args: ServerEventMap[K]) => any;
+type ServerEventListener<SD, K extends keyof ServerEventMap<SD>> = (...args: ServerEventMap<SD>[K]) => any;
 
-type DeriveFunction<C> = (context: C) => Promisable<Record<PropertyKey, any>>;
-type DeriveValue<C> = DeriveFunction<C> | Record<PropertyKey, any>;
-type ExtractDerive<C, T extends DeriveValue<C>> = T extends (...args: any[]) => any ? Awaited<ReturnType<T>> : T;
+type StartOptions<SD> = Omit<Partial<Bun.Serve.Options<SD>>, | 'error'>;
 
-type StartOptions<SocketData extends DefaultSocketData> = Omit<Partial<Bun.Serve.Options<SocketData>>, 'websocket' | 'error' | 'routes'>;
-
-export type InputFactory<C extends BaseContext> = <I>(schema?: Schema<I>) => Procedure<I, unknown, C>;
-export type ProcedureMapInitializer<R extends ProceduresMap, C extends BaseContext = BaseContext> = (input: InputFactory<C>) => R;
+export type InputFactory<C> = <I>(schema?: Schema<I>) => Procedure<I, unknown, C>;
+export type ProcedureMapInitializer<R extends ProceduresMap, C> = (input: InputFactory<C>) => R;
 
 export class Ultra<
   Procedures extends ProceduresMap = ProceduresMap,
-  Context extends BaseContext = BaseContext,
-  SocketData extends DefaultSocketData = DefaultSocketData,
+  SocketData = unknown,
+  Context extends BaseContext<SocketData> = BaseContext<SocketData>,
 > {
   protected readonly initializers = new Set<ProcedureMapInitializer<any, Context>>();
   protected readonly handlers = new Map<string, ProcedureHandler<any, any, Context>>();
-  protected readonly events = new Map<keyof ServerEventMap<SocketData>, Set<ServerEventListener<any>>>();
+  protected readonly events = new Map<keyof ServerEventMap<SocketData>, Set<ServerEventListener<SocketData, any>>>();
   protected readonly middlewares = new Set<Middleware<any, any, Context>>();
   protected readonly derived = new Set<DeriveValue<Context>>();
-  protected readonly derivedWS = new Set<DeriveValue<Context>>();
-  protected readonly options = {
-    httpEnabled: false,
-  };
+  protected readonly derivedUpgrade = new Set<DeriveUpgradeValue<Context>>();
+  protected httpEnabled = false;
 
   protected server?: Server<SocketData>;
 
   /** Register procedures */
-  routes<const P extends ProceduresMap>(initializer: ProcedureMapInitializer<P, Context>): Ultra<Procedures & P, Context, SocketData> {
+  routes<const P extends ProceduresMap>(initializer: ProcedureMapInitializer<P, Context>): Ultra<Procedures & P, SocketData, Context> {
     this.initializers.add(initializer);
     return this;
   }
@@ -66,10 +59,14 @@ export class Ultra<
   /** Register middleware or another Ultra instance */
   use<
     const PluginProcedures extends ProceduresMap,
-    const PluginContext extends BaseContext,
-    const PluginSocketData extends DefaultSocketData,
-  >(entity: Middleware<any, any, Context> | Ultra<PluginProcedures, PluginContext, PluginSocketData>,
-  ): Ultra<Procedures & PluginProcedures, Context & PluginContext, SocketData & PluginSocketData> {
+    const PluginSocketData,
+    const PluginContext extends BaseContext<PluginSocketData>,
+  >(entity: Middleware<any, any, Context> | Ultra<PluginProcedures, PluginSocketData, PluginContext>,
+  ): Ultra<
+    Procedures & PluginProcedures,
+    SocketData & PluginSocketData,
+    RebindSocketData<Context, SocketData & PluginSocketData> & RebindSocketData<PluginContext, SocketData & PluginSocketData>
+  > {
     // If entity is a middleware, add to middlewares set
     if (typeof entity === 'function') {
       this.middlewares.add(entity);
@@ -81,14 +78,17 @@ export class Ultra<
   }
 
   /** Extends  context values for every request with provided values */
-  derive<const D extends DeriveValue<Context>>(derive: D): Ultra<Procedures, Context & ExtractDerive<Context, D>, SocketData> {
+  derive<const D extends DeriveValue<Context>>(derive: D): Ultra<Procedures, SocketData, Context & ExtractDerive<Context, D>> {
     this.derived.add(derive);
     return this as any;
   }
 
-  /** Extends WS data for every ws connection */
-  deriveWS<const D extends DeriveValue<Context>>(derive: D): Ultra<Procedures, Context, SocketData & ExtractDerive<Context, D>> {
-    this.derivedWS.add(derive);
+  deriveUpgrade<const D extends DeriveUpgradeValue<Context>>(derive: D): Ultra<
+    Procedures,
+    SocketData & ExtractDeriveUpgradeData<Context, D>,
+    RebindSocketData<Context, SocketData & ExtractDeriveUpgradeData<Context, D>>
+  > {
+    this.derivedUpgrade.add(derive);
     return this as any;
   }
 
@@ -103,38 +103,24 @@ export class Ultra<
     const notFoundHandler = this.wrapHandler(() => new Response('Not Found', { status: 404 }));
 
     this.server = serve<SocketData>({
-      ...(options ?? {}),
-      routes: {
-        ...(this.options.httpEnabled && {
+      ...options,
+      ...(this.httpEnabled && {
+        routes: {
+          // Procedure routes
           ...this.buildRoutes(procedures),
+          // Not found handler
           '/*': async (request, server) => {
             this.emit('http:request', request, server);
             return notFoundHandler({
               input: null,
-              context: this.derived.size
-                ? await this.enrichContext({ server, request })
-                : ({ server, request } as Context),
+              context: this.derived.size ? await this.enrichContext({ server, request }) : { server, request } as Context,
             });
           },
-        }),
-        '/ws': async (request, server) => {
-          this.emit('http:request', request, server);
-          if (this.derivedWS.size) {
-            const data = {} as SocketData;
-            const context = this.derived.size ? await this.enrichContext({ server, request }) : ({ server, request } as Context);
-            for (const derive of this.derivedWS) {
-              Object.assign(data, typeof derive === 'function' ? await derive(context) : derive);
-            }
-            // ? Bug in Bun types?
-            (server as any).upgrade(request, { data });
-            return;
-          }
-
-          (server as any).upgrade(request);
         },
-      },
+      }),
 
       websocket: {
+        data: {} as SocketData,
         open: (ws) => { this.emit('ws:open', ws); },
         close: (ws, code, reason) => { this.emit('ws:close', ws, code, reason); },
         message: (ws, message) => {
@@ -162,18 +148,18 @@ export class Ultra<
     this.emit('server:stopped', this.server, closeActiveConnections);
   }
 
-  on<E extends keyof ServerEventMap>(event: E, listener: ServerEventListener<E>) {
+  on<E extends keyof ServerEventMap<SocketData>>(event: E, listener: ServerEventListener<SocketData, E>) {
     if (!this.events.has(event)) this.events.set(event, new Set());
     this.events.get(event)!.add(listener);
     return this;
   }
 
-  off<E extends keyof ServerEventMap>(event: E, listener: ServerEventListener<E>) {
+  off<E extends keyof ServerEventMap<SocketData>>(event: E, listener: ServerEventListener<SocketData, E>) {
     this.events.get(event)?.delete(listener);
     return this;
   }
 
-  emit<E extends keyof ServerEventMap>(event: E, ...args: ServerEventMap[E]) {
+  emit<E extends keyof ServerEventMap<SocketData>>(event: E, ...args: ServerEventMap<SocketData>[E]) {
     this.events.get(event)?.forEach(listener => listener(...args));
     return this;
   }
@@ -199,7 +185,8 @@ export class Ultra<
   }
 
   /** Enrich context with derived values */
-  protected async enrichContext(context: BaseContext): Promise<Context> {
+  protected async enrichContext(context: BaseContext<SocketData>): Promise<Context> {
+    // ? Derive sequentially to allow using previous derived values
     for (const derive of this.derived) {
       Object.assign(
         context,
@@ -210,12 +197,29 @@ export class Ultra<
     return context as Context;
   }
 
+  /** Enrich upgrade options with derived values */
+  protected async enrichUpgrade(context: Context) {
+    const options = { data: {} as Record<PropertyKey, any>, headers: new Headers() };
+
+    // ? Derive sequentially to allow using previous derived values
+    for (const derive of this.derivedUpgrade) {
+      const result = typeof derive === 'function' ? await derive(context) : derive;
+      if ('data' in result) Object.assign(options.data, result.data);
+      if ('headers' in result) {
+        for (const [key, value] of Object.entries(result.headers)) {
+          options.headers.set(key, value);
+        }
+      }
+    }
+
+    return options;
+  }
+
   /** Merge other Ultra instance with deduplication */
   protected merge(module: Ultra<any, any, any>) {
-    // module.modules.forEach(mod => this.modules.add(mod));
     module.initializers.forEach(init => this.initializers.add(init));
     module.derived.forEach(derive => this.derived.add(derive));
-    module.derivedWS.forEach(derive => this.derivedWS.add(derive));
+    module.derivedUpgrade.forEach(derive => this.derivedUpgrade.add(derive));
     module.middlewares.forEach(mw => this.middlewares.add(mw));
     module.events.forEach((listeners, event) => {
       if (!this.events.has(event)) this.events.set(event, new Set());
@@ -261,7 +265,7 @@ export class Ultra<
         if (value instanceof Procedure) {
           if (procedures.has(path)) throw new Error(`Procedure "${path}" already exists`);
 
-          if (!this.options.httpEnabled && value.getInfo()?.http?.enabled) this.options.httpEnabled = true;
+          if (!this.httpEnabled && value.metadata()?.http?.enabled) this.httpEnabled = true;
 
           procedures.set(path, value as Procedure<any, any, Context>);
           this.handlers.set(path, this.wrapHandler(value.wrap()));
@@ -282,22 +286,23 @@ export class Ultra<
   protected buildRoutes(procedures: Map<string, Procedure<any, any, Context>>) {
     const routes: BunRoutes = {};
     for (const [path, procedure] of procedures) {
-      const procedureInfo = procedure.getInfo();
+      const metadata = procedure.metadata();
       // Skip if HTTP is disabled
-      if (!procedureInfo.http?.enabled) continue;
+      if (!metadata.http?.enabled || metadata.type === 'fetch' || metadata.type === 'error') continue;
 
       const httpPath = `/${path}`;
 
       const handler = this.handlers.get(path);
       if (!handler) throw new Error(`Handler for procedure at path "${path}" is not defined`);
 
+      // ! Runtime logic edits may performance hit. Avoid adding logic that can be resolved at startup.
       const httpHandler: BunRouteHandler = async (request: BunRequest, server: Server<SocketData>) => {
         this.emit('http:request', request, server);
+
         let input: any = request.body;
+        const context = this.derived.size ? await this.enrichContext({ server, request }) : { server, request } as Context;
 
-        const baseContext = { server, request } as Context;
-        const context = this.derived.size ? await this.enrichContext(baseContext) : baseContext;
-
+        // Parse input
         if (input) {
           // Parse GET with query parameters
           if (request.method === 'GET') {
@@ -343,14 +348,14 @@ export class Ultra<
       };
 
       // If method is not specified, register route without method restriction
-      if (!procedureInfo.http.method) {
+      if (!metadata.http.method) {
         routes[httpPath] = httpHandler;
         continue;
       }
 
       // Register route with method restriction
       if (!routes[httpPath]) routes[httpPath] = {};
-      (routes[httpPath] as Record<string, BunRouteHandler>)[procedureInfo.http.method] = httpHandler;
+      (routes[httpPath] as Record<string, BunRouteHandler>)[metadata.http.method] = httpHandler;
     }
 
     return routes;

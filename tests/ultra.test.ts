@@ -2,7 +2,8 @@ import type { BaseContext } from '../src/context';
 import type { Middleware } from '../src/middleware';
 import type { ProcedureHandler } from '../src/procedure';
 import type { InputFactory } from '../src/ultra';
-import { expect, it, mock } from 'bun:test';
+import { expect, expectTypeOf, it, mock } from 'bun:test';
+import { isWS } from '../src/context';
 import { Ultra } from '../src/ultra';
 import { start } from './utils';
 
@@ -60,7 +61,7 @@ it.concurrent('deduplication', async () => {
 it.concurrent('throws on procedure path conflicts', () => {
   const service = new Ultra()
     .routes(input => ({ ping: input().handler(() => 'pong') }))
-    .routes(input => ({ ping: input().handler(() => 'pong2') }));
+    .routes(input => ({ ping: input().handler(() => 'pong') }));
 
   expect(() => service.start()).toThrowError('Procedure "ping" already exists');
 });
@@ -109,14 +110,28 @@ it.concurrent('enriches context with derived values', async () => {
   const service = new Ultra()
     .derive({ static: 'from-object' })
     .derive(() => ({ dynamic: 'derived' }))
+    .deriveUpgrade(() => ({ data: { session: 'id' } }))
+    .deriveUpgrade(() => ({ data: { another: 'value' }, headers: { 'x-custom-header': 'custom' } }))
     .use(module)
     .routes(input => ({
       ping: input().http().handler(({ context }) => {
+        if (isWS(context)) {
+          expectTypeOf(context.ws.data).toMatchObjectType<{ session: string; another: string }>();
+          expect(context.ws.data).toMatchObject({ session: 'id', another: 'value' });
+        }
+
+        expectTypeOf(context).toExtend<{
+          static: string;
+          dynamic: string;
+          module: string;
+        }>();
+
         expect(context).toMatchObject({
           static: 'from-object',
           dynamic: 'derived',
           module: 'from-module',
         });
+
         return 'pong';
       }),
     }));

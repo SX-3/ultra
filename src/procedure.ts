@@ -1,4 +1,3 @@
-import type { BaseContext } from './context';
 import type { HTTPMethod } from './http';
 import type { Middleware } from './middleware';
 import type { Promisable } from './types';
@@ -10,30 +9,36 @@ export interface ProcedureOptions<I, C> {
   context: C;
 }
 
-export type ProcedureHandler<I, O, C extends BaseContext> = (options: ProcedureOptions<I, C>) => Promisable<O>;
+/** Input: I, Output: O, Context: C */
+export type ProcedureHandler<I, O, C> = (options: ProcedureOptions<I, C>) => Promisable<O>;
+export type ProcedureType = 'fetch' | 'upgrade' | 'error';
 
 export interface HTTPOptions {
   enabled?: boolean;
   method?: HTTPMethod;
 }
 
-export class Procedure<I = unknown, O = unknown, C extends BaseContext = BaseContext> {
+export class Procedure<I = unknown, O = unknown, C = unknown> {
   protected inputSchema?: Schema<I>;
   protected outputSchema?: Schema<O>;
   protected handlerFunction?: ProcedureHandler<I, O, C>;
   protected middleware = new Set<Middleware<I, O, C>>();
   protected httpOptions?: HTTPOptions;
+  protected procedureType: ProcedureType | null = null;
 
+  /** Set procedure input validation schema or type */
   input<const NI>(schema?: Schema<NI>): Procedure<NI, O, C> {
     if (schema) this.inputSchema = schema as any;
     return this as unknown as Procedure<NI, O, C>;
   }
 
+  /** Set procedure output validation schema or type */
   output<const NO>(schema?: Schema<NO>): Procedure<I, NO, C> {
     if (schema) this.outputSchema = schema as any;
     return this as unknown as Procedure<I, NO, C>;
   }
 
+  /** Set procedure handler function */
   handler<const ActualOutput>(
     handler: ProcedureHandler<I, unknown extends O ? ActualOutput : O, C>,
   ): Procedure<I, unknown extends O ? ActualOutput : O, C> {
@@ -41,16 +46,25 @@ export class Procedure<I = unknown, O = unknown, C extends BaseContext = BaseCon
     return this as unknown as Procedure<I, unknown extends O ? ActualOutput : O, C>;
   }
 
+  /** Set HTTP options for the procedure */
   http(options?: HTTPOptions): Procedure<I, O, C> {
     this.httpOptions = { enabled: true, ...options };
     return this;
   }
 
-  use(middleware: Middleware<I, O, C>): Procedure<I, O, C> {
+  /** Add middleware to the procedure */
+  use(middleware: Middleware<I, O, C>) {
     this.middleware.add(middleware);
     return this;
   }
 
+  /** Set procedure type for default handlers */
+  type(type: ProcedureType) {
+    this.procedureType = type;
+    return this;
+  }
+
+  /** Wrap the procedure handler with validation and middleware */
   wrap() {
     if (!this.handlerFunction) throw new Error('Procedure handler is not defined');
     if (!this.inputSchema && !this.outputSchema && !this.middleware.size) return this.handlerFunction;
@@ -97,9 +111,11 @@ export class Procedure<I = unknown, O = unknown, C extends BaseContext = BaseCon
     return composed;
   }
 
-  getInfo() {
+  /** Get procedure metadata information */
+  metadata() {
     return {
       http: this.httpOptions,
+      type: this.procedureType,
       hasInput: !!this.inputSchema,
       hasOutput: !!this.outputSchema,
     };

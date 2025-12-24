@@ -451,12 +451,11 @@ const app = new Ultra().use(session).routes(input => ({
 
 ### Authentication
 
-Auth module requires [session module](#sessions).
-
 ```ts
 // auth.ts
 import { Ultra } from '@sx3/ultra';
 import { createAuthModule, defineConfig, SessionAuthProvider } from '@sx3/ultra/auth';
+import type { SessionContext } from '@sx3/ultra/session';
 
 interface User {
   name: string;
@@ -466,7 +465,7 @@ interface User {
 const config = defineConfig<User>({
   provider: 'session',
   providers: {
-    session: context => new SessionAuthProvider<User>(context),
+    session: context => new SessionAuthProvider<User>(context as SessionContext),
   },
 });
 

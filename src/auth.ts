@@ -1,8 +1,9 @@
 import type { BaseContext } from './context';
 import type { Middleware } from './middleware';
-import type { Session, SessionContext } from './session';
+import type { SessionContext } from './session';
 import type { JSONValue, Promisable } from './types';
 import { UnauthorizedError } from './error';
+import { Ultra } from './ultra';
 
 export interface AuthProvider<User> {
   user: User | null;
@@ -12,7 +13,7 @@ export interface AuthProvider<User> {
   setUser: (user: User) => Promisable<void>;
 }
 
-type AuthProviderFactory<User = any> = (context: SessionContext) => AuthProvider<User>;
+type AuthProviderFactory<User = any> = (context: BaseContext) => AuthProvider<User>;
 
 interface AuthConfig<P extends Record<string, AuthProviderFactory> = Record<string, AuthProviderFactory>> {
   provider: keyof P;
@@ -20,7 +21,6 @@ interface AuthConfig<P extends Record<string, AuthProviderFactory> = Record<stri
 }
 
 export type AuthContext<User> = BaseContext & {
-  session: Session<any>;
   auth: Auth<User>;
 };
 
@@ -29,6 +29,15 @@ export function defineConfig<
   P extends Record<string, AuthProviderFactory<User>> = Record<string, AuthProviderFactory<User>>,
 >(config: AuthConfig<P>) {
   return config;
+}
+
+export function createAuthModule<
+  User,
+  P extends Record<string, AuthProviderFactory<User>> = Record<string, AuthProviderFactory<User>>,
+>(config: AuthConfig<P>) {
+  return new Ultra().derive(context => ({
+    auth: new Auth<User, P>(config, context),
+  }));
 }
 
 export const isAuthenticated: Middleware<any, any, AuthContext<any>> = async (options) => {
@@ -45,13 +54,13 @@ export class Auth<
   Providers extends Record<string, AuthProviderFactory<User>> = Record<string, AuthProviderFactory<User>>,
 > {
   protected readonly config: AuthConfig<Providers>;
-  protected readonly context: SessionContext;
+  protected readonly context: BaseContext;
   protected readonly usingProvider: keyof Providers;
   protected readonly providerCache: Map<keyof Providers, AuthProvider<User>>;
 
   constructor(
     config: AuthConfig<Providers>,
-    context: SessionContext,
+    context: BaseContext,
     provider: keyof Providers = config.provider,
     providerCache = new Map<keyof Providers, AuthProvider<User>>(),
   ) {

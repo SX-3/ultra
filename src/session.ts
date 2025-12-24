@@ -2,6 +2,7 @@ import type { BunRequest, CookieSameSite, RedisClient } from 'bun';
 import type { BaseContext, HTTPContext } from './context';
 import type { DeepReadonly, JSONObject, JSONValue, Promisable } from './types';
 import { randomBytes } from 'node:crypto';
+import { Cookie } from 'bun';
 import { isHTTP, isWS } from './context';
 import { sign, unsign } from './crypto';
 import { UnsupportedProtocolError } from './error';
@@ -77,7 +78,13 @@ export function defineConfig<S extends Record<string, SessionStoreFactory>>(conf
 /** Extends context and socket data, initiate session instance every request */
 export function createSessionModule<S extends Record<string, SessionStoreFactory>>(config: SessionConfig<S>) {
   return new Ultra()
-    .deriveWS((context: BaseContext) => ({ sessionId: Session.getOrCreateId((context as HTTPContext).request, config) }))
+    .deriveUpgrade((context) => {
+      const id = Session.getOrCreateId((context as HTTPContext).request, config);
+      return {
+        headers: { 'Set-Cookie': new Cookie(config.name, sign(id, config.secret), config.cookie).toString() },
+        data: { sessionId: id },
+      };
+    })
     .derive(context => ({ session: new Session(config, context) }))
     .use(async ({ context, next }) => {
       await context.session.initiate();
@@ -122,8 +129,8 @@ export class Session<
         if (cookie) this.sessionIdFromClient = unsign(cookie, config.secret);
         break;
       }
-      case isWS<SessionSocketData>(context): {
-        this.sessionIdFromClient = context.ws.data.sessionId || null;
+      case isWS(context): {
+        this.sessionIdFromClient = (context.ws.data as SessionSocketData).sessionId || null;
         break;
       }
       default: {
@@ -254,9 +261,9 @@ export class RedisSessionStore implements SessionStore {
   }
 }
 
+const memoryStore = new Map<string, { data: SessionData; touched: number }>();
 export class MemorySessionStore implements SessionStore {
   protected readonly config: SessionConfig<any>;
-  protected readonly sessions = new Map<string, { data: SessionData; touched: number }>();
   protected readonly sweepIntervalMs: number;
   protected readonly ttlMs: number;
   protected lastSweepAt = Date.now();
@@ -269,30 +276,30 @@ export class MemorySessionStore implements SessionStore {
 
   read(sessionId: string) {
     this.maybeSweep();
-    return this.sessions.get(sessionId)?.data || null;
+    return memoryStore.get(sessionId)?.data ?? null;
   }
 
   write(sessionId: string, data: SessionData) {
     this.maybeSweep();
-    this.sessions.set(sessionId, { data, touched: Date.now() });
+    memoryStore.set(sessionId, { data, touched: Date.now() });
   }
 
   destroy(sessionId: string) {
     this.maybeSweep();
-    this.sessions.delete(sessionId);
+    memoryStore.delete(sessionId);
   }
 
   touch(sessionId: string) {
     this.maybeSweep();
-    const entry = this.sessions.get(sessionId);
+    const entry = memoryStore.get(sessionId);
     if (entry) entry.touched = Date.now();
   }
 
   protected maybeSweep(now = Date.now()) {
     if (now - this.lastSweepAt < this.sweepIntervalMs) return;
     this.lastSweepAt = now;
-    for (const [sessionId, entry] of this.sessions) {
-      if (now - entry.touched > this.ttlMs) this.sessions.delete(sessionId);
+    for (const [sessionId, entry] of memoryStore) {
+      if (now - entry.touched > this.ttlMs) memoryStore.delete(sessionId);
     }
   }
 }
