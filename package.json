@@ -1,7 +1,7 @@
 {
   "name": "@sx3/ultra",
   "type": "module",
-  "version": "0.0.4",
+  "version": "0.1.0",
   "private": false,
   "description": "Type-safe RPC over HTTP/WebSocket for Bun",
   "author": "SX3",
