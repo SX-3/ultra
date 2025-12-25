@@ -126,7 +126,7 @@ const app = new Ultra()
           return context.auth.user; // Access authenticated user
         }),
     },
-  }));
+  }), [isAuthenticated]); // Apply middleware scoped to routes
 ```
 
 ## Validation
@@ -205,17 +205,24 @@ You can extend the context with a function or value. Example from session module
 
 ```ts
 // session.ts
-
 export function createSessionModule<S extends Record<string, SessionStoreFactory>>(config: SessionConfig<S>) {
-  // Create module
   return new Ultra()
-  // deriveWS to add sessionId to WebSocket data object | run each socket connection | use for store data in WS connection
-    .deriveWS((context: HTTPContext) => ({ sessionId: Session.getOrCreateId(context.request, config) }))
-  // derive function add session instance to context | run each request
+  // Every socket connection
+    .deriveUpgrade((context) => {
+      const id = Session.getOrCreateId((context as HTTPContext).request, config);
+      return {
+        headers: { 'Set-Cookie': new Cookie(config.name, sign(id, config.secret), config.cookie).toString() },
+        data: { sessionId: id },
+      };
+    })
+    // Every request
     .derive(context => ({ session: new Session(config, context) }))
-  // Middleware to initiate and commit session on each request
     .use(async ({ context, next }) => {
-      await context.session.initiate();
+      if (isWS(context)) {
+        // context.ws.data.sessionId typed by string
+      }
+
+      await context.session.initiate(); // Fully typed
       const response = await next();
       await context.session.commit();
       return response;
@@ -229,11 +236,23 @@ You can add a static value for each request:
 const app = new Ultra().derive({ appName: 'My Ultra App' });
 ```
 
+Context can be extended by other modules:
+
+```ts
+const app = new Ultra()
+  .use(session) // session module adds `session` to context
+  .use(auth) // auth module adds `auth` to context
+  .use(({ context: { auth, session }, next }) => {
+    // auth and session fully typed
+    return next();
+  });
+```
+
 ## Core concepts
 
 ### Modules
 
-Each module is a self-contained application.
+Each module is a self-contained application:
 
 ```ts
 // auth.ts
@@ -261,7 +280,7 @@ const main = new Ultra()
   .start();
 ```
 
-You can use modules as many times as you like.
+You can use modules as many times as you like:
 
 ```ts
 const moduleA = new Ultra();
@@ -396,7 +415,7 @@ import { createCORSMiddleware } from '@sx3/ultra/cors';
 const cors = createCORSMiddleware({
   origin: ['http://localhost:5173'],
   credentials: true,
-  // methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  // methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
   // allowedHeaders: ['Content-Type', 'Authorization'],
   // exposedHeaders: ['X-Custom-Header'],
   // maxAge: 3600,
@@ -407,7 +426,7 @@ const app = new Ultra().use(cors); // Apply CORS middleware globally
 
 ### Sessions
 
-Multiple session stores are supported: in-memory, Redis, and custom stores.
+Multiple session stores are supported: in-memory, Redis, and your custom stores.
 
 ```ts
 // session.ts
@@ -415,7 +434,7 @@ import { env } from '#app/env';
 import { createSessionModule, defineConfig, MemorySessionStore, RedisSessionStore } from '@/sx3/ultra/session';
 
 export const config = defineConfig({
-  // Name for cookie or prefix for redis key
+  // Name for cookie or prefix for redis key and session cookie
   name: 'session',
   ttl: 3600, // 1 hour
   store: 'redis',

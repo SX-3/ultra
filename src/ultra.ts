@@ -46,7 +46,7 @@ export class Ultra<
   SocketData = unknown,
   Context extends BaseContext<SocketData> = BaseContext<SocketData>,
 > {
-  protected readonly initializers = new Set<ProcedureMapInitializer<any, Context>>();
+  protected readonly initializers = new Map<ProcedureMapInitializer<any, Context>, Set<Middleware<any, any, Context>>>();
   protected readonly handlers = new Map<string, ProcedureHandler<any, any, Context>>();
   protected readonly events = new Map<keyof ServerEventMap<SocketData>, Set<ServerEventListener<SocketData, any>>>();
   protected readonly middlewares = new Set<Middleware<any, any, Context>>();
@@ -65,8 +65,13 @@ export class Ultra<
   }
 
   /** Register procedures */
-  routes<const P extends ProceduresMap>(initializer: ProcedureMapInitializer<P, Context>): Ultra<Procedures & P, SocketData, Context> {
-    this.initializers.add(initializer);
+  routes<const P extends ProceduresMap>(
+    initializer: ProcedureMapInitializer<P, Context>,
+    middlewares?: Middleware<any, any, Context>[],
+  ): Ultra<Procedures & P, SocketData, Context> {
+    const existed = this.initializers.get(initializer);
+    if (!existed) this.initializers.set(initializer, new Set(middlewares));
+    else middlewares?.forEach(mw => existed.add(mw));
     return this;
   }
 
@@ -114,10 +119,12 @@ export class Ultra<
 
     const procedures = this.buildProcedures();
 
-    const notFoundHandler = this.wrapHandler(() => new Response('Not Found', { status: 404 }));
+    const notFoundHandler = this.wrapHandler(
+      () => new Response('Not Found', { status: 404 }),
+      this.middlewares,
+    );
 
     this.server = serve<SocketData>({
-
       ...(this.httpEnabled && {
         routes: {
           // Procedure routes
@@ -250,7 +257,12 @@ export class Ultra<
 
   /** Merge other Ultra instance with deduplication */
   protected merge(module: Ultra<any, any, any>) {
-    module.initializers.forEach(init => this.initializers.add(init));
+    for (const [initializer, middlewares] of module.initializers) {
+      const existed = this.initializers.get(initializer);
+      if (!existed) this.initializers.set(initializer, new Set(middlewares));
+      else middlewares.forEach(mw => existed.add(mw));
+    }
+
     module.derived.forEach(derive => this.derived.add(derive));
     module.derivedUpgrade.forEach(derive => this.derivedUpgrade.add(derive));
     module.middlewares.forEach(mw => this.middlewares.add(mw));
@@ -262,14 +274,14 @@ export class Ultra<
   }
 
   /** Wrap procedure handler with global middlewares */
-  protected wrapHandler(handler: ProcedureHandler<any, any, any>): ProcedureHandler<any, any, any> {
-    if (!this.middlewares.size) return handler;
-    const middlewares = Array.from(this.middlewares);
+  protected wrapHandler(handler: ProcedureHandler<any, any, any>, middlewares: Set<Middleware<any, any, Context>>): ProcedureHandler<any, any, any> {
+    if (!middlewares.size) return handler;
+    const middlewaresArray = Array.from(middlewares);
     return async (options: ProcedureOptions<any, Context>) => {
       let idx = 0;
       const next = () => {
-        if (idx === middlewares.length) return handler(options);
-        return middlewares[idx++]!({ ...options, next });
+        if (idx === middlewaresArray.length) return handler(options);
+        return middlewaresArray[idx++]!({ ...options, next });
       };
       return next();
     };
@@ -286,7 +298,7 @@ export class Ultra<
       return procedure;
     };
 
-    for (const initializer of this.initializers) {
+    for (const [initializer, scopedMiddleware] of this.initializers) {
       const map = initializer(inputFactory);
       const stack: Array<{ path: string; value: Procedure<any, any, Context> | ProceduresMap }> = [];
 
@@ -300,10 +312,19 @@ export class Ultra<
         if (value instanceof Procedure) {
           if (procedures.has(path)) throw new Error(`Procedure "${path}" already exists`);
 
-          if (!this.httpEnabled && value.metadata()?.http?.enabled) this.httpEnabled = true;
+          const procedure = value.metadata();
+
+          if (!this.httpEnabled && procedure.http?.enabled) this.httpEnabled = true;
 
           procedures.set(path, value as Procedure<any, any, Context>);
-          this.handlers.set(path, this.wrapHandler(value.wrap()));
+
+          const middlewares = new Set([
+            ...this.middlewares,
+            ...scopedMiddleware,
+            ...procedure.middlewares,
+          ]);
+
+          this.handlers.set(path, this.wrapHandler(value.compile(), middlewares));
           continue;
         }
 

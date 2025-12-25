@@ -1,4 +1,4 @@
-import type { BaseContext } from '../src/context';
+import type { BaseContext, DeriveFunction } from '../src/context';
 import type { Middleware } from '../src/middleware';
 import type { ProcedureHandler } from '../src/procedure';
 import type { InputFactory } from '../src/ultra';
@@ -13,20 +13,26 @@ it.concurrent('deduplication', async () => {
     requestPayloads.push(options.input);
     return options.next();
   });
-  const authDeriveFunction = mock<Middleware<any, any, BaseContext>>(() => ({ auth: true }));
+  const authDeriveFunction = mock<DeriveFunction<any>>(() => ({ auth: true }));
   const onServerStartedHandler = mock(() => {});
   const usersArray = ['user1', 'user2', 'user3'] as const;
   const usersListHandler = mock<ProcedureHandler<any, typeof usersArray, any>>(() => usersArray);
+  const scopedMiddleware = mock<Middleware<any, any, BaseContext>>(options => options.next());
   const usersRoutesInitializer = mock((input: InputFactory<BaseContext>) => ({
     users: {
-      list: input().http().handler(usersListHandler),
+      list: input().use(loggerMiddleware).http().handler(usersListHandler),
     },
   }));
 
   const users = new Ultra()
     .use(loggerMiddleware)
     .derive(authDeriveFunction)
-    .routes(usersRoutesInitializer)
+    .routes(usersRoutesInitializer, [loggerMiddleware])
+    .routes(usersRoutesInitializer, [loggerMiddleware])
+    .routes(input => ({
+      scoped1: input().http().handler(() => 'scoped1'),
+      scoped2: input().http().handler(() => 'scoped2'),
+    }), [scopedMiddleware])
     .on('server:started', onServerStartedHandler);
 
   const app = new Ultra()
@@ -54,6 +60,10 @@ it.concurrent('deduplication', async () => {
   expect(loggerMiddleware, 'middleware called more than twice (ws)').toHaveBeenCalledTimes(2);
   expect(usersRoutesInitializer, 'initializer called more than twice (ws)').toHaveBeenCalledTimes(1);
   expect(onServerStartedHandler, 'server started handler called more than twice (ws)').toHaveBeenCalledTimes(1);
+
+  expect(scopedMiddleware, 'scoped middleware called without being called').toHaveBeenCalledTimes(0);
+  await Promise.all([http.scoped1(), ws.scoped2()]);
+  expect(scopedMiddleware, 'scoped middleware not called twice').toHaveBeenCalledTimes(2);
 
   await stop();
 });
@@ -145,4 +155,16 @@ it.concurrent('enriches context with derived values', async () => {
   expect(await ws.ping(), 'ws transport failed').toBe('pong');
 
   await stop();
+});
+
+it.concurrent('http options', async () => {
+  const service = new Ultra({ http: { enableByDefault: true } })
+    .routes(input => ({
+      ping: input().handler(() => 'pong'),
+    }));
+
+  const { http } = start(service);
+
+  const result = await http.ping();
+  expect(result).toBe('pong');
 });

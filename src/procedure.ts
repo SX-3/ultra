@@ -65,17 +65,15 @@ export class Procedure<I = unknown, O = unknown, C = unknown> {
     return this;
   }
 
-  /** Wrap the procedure handler with validation and middleware */
-  wrap() {
+  /** Returns a function that checks input and output parameters.  */
+  compile() {
     if (!this.handlerFunction) throw new Error('Procedure handler is not defined');
-    if (!this.inputSchema && !this.outputSchema && !this.middlewares.size) return this.handlerFunction;
+    if (!this.inputSchema && !this.outputSchema) return this.handlerFunction;
 
     let composed: ProcedureHandler<I, O, C> = this.handlerFunction;
 
     // Apply input/output validation
     switch (true) {
-      case !this.inputSchema && !this.outputSchema:
-        break;
       // Validate only input
       case !this.inputSchema: {
         const previous = composed;
@@ -95,17 +93,6 @@ export class Procedure<I = unknown, O = unknown, C = unknown> {
           const result = await previous({ ...options, input: await validate(this.inputSchema!, options.input) });
           return validate(this.outputSchema!, result);
         };
-      }
-    }
-
-    // Apply middleware in reverse order
-    if (this.middlewares.size) {
-      const middleware = Array.from(this.middlewares);
-
-      for (let i = middleware.length - 1; i >= 0; i--) {
-        const mw = middleware[i]!;
-        const previous = composed;
-        composed = options => mw({ ...options, next: () => previous(options) });
       }
     }
 
