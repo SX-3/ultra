@@ -11,7 +11,6 @@ export interface ProcedureOptions<I, C> {
 
 /** Input: I, Output: O, Context: C */
 export type ProcedureHandler<I, O, C> = (options: ProcedureOptions<I, C>) => Promisable<O>;
-export type ProcedureType = 'fetch' | 'upgrade' | 'error';
 
 export interface HTTPOptions {
   enabled?: boolean;
@@ -19,12 +18,11 @@ export interface HTTPOptions {
 }
 
 export class Procedure<I = unknown, O = unknown, C = unknown> {
+  protected readonly middlewares = new Set<Middleware<I, O, C>>();
   protected inputSchema?: Schema<I>;
   protected outputSchema?: Schema<O>;
   protected handlerFunction?: ProcedureHandler<I, O, C>;
-  protected middleware = new Set<Middleware<I, O, C>>();
   protected httpOptions?: HTTPOptions;
-  protected procedureType: ProcedureType | null = null;
 
   /** Set procedure input validation schema or type */
   input<const NI>(schema?: Schema<NI>): Procedure<NI, O, C> {
@@ -47,27 +45,30 @@ export class Procedure<I = unknown, O = unknown, C = unknown> {
   }
 
   /** Set HTTP options for the procedure */
-  http(options?: HTTPOptions): Procedure<I, O, C> {
-    this.httpOptions = { enabled: true, ...options };
+  http(options?: HTTPOptions | boolean | HTTPMethod): Procedure<I, O, C> {
+    switch (typeof options) {
+      case 'boolean':
+        this.httpOptions = { enabled: options };
+        break;
+      case 'string':
+        this.httpOptions = { enabled: true, method: options };
+        break;
+      default:
+        this.httpOptions = { enabled: true, ...(options ?? {}) };
+    }
     return this;
   }
 
   /** Add middleware to the procedure */
   use(middleware: Middleware<I, O, C>) {
-    this.middleware.add(middleware);
-    return this;
-  }
-
-  /** Set procedure type for default handlers */
-  type(type: ProcedureType) {
-    this.procedureType = type;
+    this.middlewares.add(middleware);
     return this;
   }
 
   /** Wrap the procedure handler with validation and middleware */
   wrap() {
     if (!this.handlerFunction) throw new Error('Procedure handler is not defined');
-    if (!this.inputSchema && !this.outputSchema && !this.middleware.size) return this.handlerFunction;
+    if (!this.inputSchema && !this.outputSchema && !this.middlewares.size) return this.handlerFunction;
 
     let composed: ProcedureHandler<I, O, C> = this.handlerFunction;
 
@@ -98,8 +99,8 @@ export class Procedure<I = unknown, O = unknown, C = unknown> {
     }
 
     // Apply middleware in reverse order
-    if (this.middleware.size) {
-      const middleware = Array.from(this.middleware);
+    if (this.middlewares.size) {
+      const middleware = Array.from(this.middlewares);
 
       for (let i = middleware.length - 1; i >= 0; i--) {
         const mw = middleware[i]!;
@@ -115,9 +116,13 @@ export class Procedure<I = unknown, O = unknown, C = unknown> {
   metadata() {
     return {
       http: this.httpOptions,
-      type: this.procedureType,
-      hasInput: !!this.inputSchema,
-      hasOutput: !!this.outputSchema,
+      middlewares: this.middlewares,
+      has: {
+        handler: !!this.handlerFunction,
+        middleware: this.middlewares.size > 0,
+        input: !!this.inputSchema,
+        output: !!this.outputSchema,
+      },
     };
   }
 }

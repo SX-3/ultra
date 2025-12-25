@@ -30,10 +30,16 @@ interface ServerEventMap<SD> {
 
 type ServerEventListener<SD, K extends keyof ServerEventMap<SD>> = (...args: ServerEventMap<SD>[K]) => any;
 
-type StartOptions<SD> = Omit<Partial<Bun.Serve.Options<SD>>, | 'error'>;
+type StartOptions<SD> = Partial<Bun.Serve.Options<SD>>;
 
 export type InputFactory<C> = <I>(schema?: Schema<I>) => Procedure<I, unknown, C>;
 export type ProcedureMapInitializer<R extends ProceduresMap, C> = (input: InputFactory<C>) => R;
+
+export interface UltraOptions {
+  http?: {
+    enableByDefault?: boolean;
+  };
+}
 
 export class Ultra<
   Procedures extends ProceduresMap = ProceduresMap,
@@ -46,9 +52,17 @@ export class Ultra<
   protected readonly middlewares = new Set<Middleware<any, any, Context>>();
   protected readonly derived = new Set<DeriveValue<Context>>();
   protected readonly derivedUpgrade = new Set<DeriveUpgradeValue<Context>>();
-  protected httpEnabled = false;
+  protected readonly options: UltraOptions = {
+    http: { enableByDefault: false },
+  };
 
+  protected httpEnabled = false;
   protected server?: Server<SocketData>;
+
+  constructor(options?: UltraOptions) {
+    if (options) this.options = { ...this.options, ...options };
+    this.httpEnabled = this.options.http?.enableByDefault ?? false;
+  }
 
   /** Register procedures */
   routes<const P extends ProceduresMap>(initializer: ProcedureMapInitializer<P, Context>): Ultra<Procedures & P, SocketData, Context> {
@@ -103,11 +117,28 @@ export class Ultra<
     const notFoundHandler = this.wrapHandler(() => new Response('Not Found', { status: 404 }));
 
     this.server = serve<SocketData>({
-      ...options,
+
       ...(this.httpEnabled && {
         routes: {
           // Procedure routes
           ...this.buildRoutes(procedures),
+          '/ws': async (request, server) => {
+            this.emit('http:request', request, server);
+            if (!this.derivedUpgrade.size) {
+              // @ts-expect-error Bun types
+              if (!server.upgrade(request)) {
+                return new Response('WebSocket upgrade failed', { status: 500 });
+              };
+              return;
+            }
+
+            const context = this.derived.size ? await this.enrichContext({ server, request }) : { server, request } as Context;
+            // @ts-expect-error Bun types
+            if (!server.upgrade(request, await this.enrichUpgrade(context))) {
+              return new Response('WebSocket upgrade failed', { status: 500 });
+            };
+          },
+
           // Not found handler
           '/*': async (request, server) => {
             this.emit('http:request', request, server);
@@ -136,6 +167,8 @@ export class Ultra<
         console.error('Unhandled server error:', error);
         return new Response('Internal Server Error', { status: 500 });
       },
+
+      ...options,
     } as Bun.Serve.Options<SocketData>);
 
     this.emit('server:started', this.server);
@@ -248,7 +281,9 @@ export class Ultra<
 
     const inputFactory: InputFactory<Context> = <I>(schema?: Schema<I>) => {
       const procedure = new Procedure<I, unknown, Context>();
-      return schema ? procedure.input(schema) : procedure;
+      if (schema) procedure.input(schema);
+      if (this.options.http?.enableByDefault) procedure.http();
+      return procedure;
     };
 
     for (const initializer of this.initializers) {
@@ -288,7 +323,7 @@ export class Ultra<
     for (const [path, procedure] of procedures) {
       const metadata = procedure.metadata();
       // Skip if HTTP is disabled
-      if (!metadata.http?.enabled || metadata.type === 'fetch' || metadata.type === 'error') continue;
+      if (!metadata.http?.enabled) continue;
 
       const httpPath = `/${path}`;
 
