@@ -66,8 +66,13 @@ export function createCORSMiddleware(config: CorsConfig): Middleware<unknown, un
       });
     }
 
-    // Actual request
-    const response = toHTTPResponse(await options.next());
+    let response: Response;
+    try {
+      response = toHTTPResponse(await options.next());
+    }
+    catch (error) {
+      response = toHTTPResponse(error);
+    }
 
     // Set CORS headers
     response.headers.set('Access-Control-Allow-Origin', origin);
