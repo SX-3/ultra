@@ -8,7 +8,7 @@ export function toHTTPResponse(data: unknown): Response {
     case data instanceof UltraError:
       return data.toResponse();
     case data instanceof Error:
-      return new Response('Internal Server Error', { status: 500 });
+      return new Response(data.message, { status: 500 });
     case typeof data === 'object':
       return Response.json(data);
     case !data:

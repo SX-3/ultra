@@ -44,9 +44,9 @@ export function start<T extends Ultra<any, any, any>>(app: T, port = portCounter
     }),
     stop: () => {
       socket.close();
-      instance.stop(true);
       apps.delete(app);
       sockets.delete(socket);
+      return instance.stop(true);
     },
     isReady: promise,
   };

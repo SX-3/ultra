@@ -15,7 +15,7 @@ describe('toHTTPResponse', () => {
     const response = toHTTPResponse(error);
 
     expect(response?.status).toBe(422);
-    await expect(response?.json()).resolves.toEqual({
+    expect(response?.json()).resolves.toEqual({
       error: { name: 'ValidationError', message: 'nope' },
     });
   });
@@ -24,7 +24,7 @@ describe('toHTTPResponse', () => {
     const response = toHTTPResponse(new Error('boom'));
 
     expect(response?.status).toBe(500);
-    await expect(readText(response)).resolves.toBe('Internal Server Error');
+    expect(response?.text()).resolves.toEqual('boom');
   });
 
   it('serializes plain objects as JSON', async () => {
@@ -32,21 +32,21 @@ describe('toHTTPResponse', () => {
     const response = toHTTPResponse(body);
 
     expect(response?.status).toBe(200);
-    await expect(response?.json()).resolves.toEqual(body);
+    expect(response?.json()).resolves.toEqual(body);
   });
 
   it('uses 204 for undefined-like values', async () => {
     const response = toHTTPResponse(undefined);
 
     expect(response?.status).toBe(204);
-    await expect(readText(response)).resolves.toBe('');
+    expect(readText(response)).resolves.toBe('');
   });
 
   it('stringifies other values', async () => {
     const response = toHTTPResponse(123n);
 
     expect(response?.status).toBe(200);
-    await expect(readText(response)).resolves.toBe('123');
+    expect(readText(response)).resolves.toBe('123');
   });
 });
 

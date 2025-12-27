@@ -3,7 +3,6 @@ import type { BaseContext, DeriveUpgradeValue, DeriveValue, ExtractDerive, Extra
 import type { BunRouteHandler, BunRoutes } from './http';
 import type { Middleware } from './middleware';
 import type { ProcedureHandler, ProcedureOptions } from './procedure';
-import type { Payload } from './rpc';
 import type { StandardSchemaV1 as Schema } from './validation';
 import { serve } from 'bun';
 import { Procedure } from './procedure';
@@ -47,7 +46,6 @@ export class Ultra<
   Context extends BaseContext<SocketData> = BaseContext<SocketData>,
 > {
   protected readonly initializers = new Map<ProcedureMapInitializer<any, Context>, Set<Middleware<any, any, Context>>>();
-  protected readonly handlers = new Map<string, ProcedureHandler<any, any, Context>>();
   protected readonly events = new Map<keyof ServerEventMap<SocketData>, Set<ServerEventListener<SocketData, any>>>();
   protected readonly middlewares = new Set<Middleware<any, any, Context>>();
   protected readonly derived = new Set<DeriveValue<Context>>();
@@ -96,12 +94,13 @@ export class Ultra<
     return this as any;
   }
 
-  /** Extends  context values for every request with provided values */
+  /** Extends context values for every request with provided values */
   derive<const D extends DeriveValue<Context>>(derive: D): Ultra<Procedures, SocketData, Context & ExtractDerive<Context, D>> {
     this.derived.add(derive);
     return this as any;
   }
 
+  /** Extends socket data and return headers */
   deriveUpgrade<const D extends DeriveUpgradeValue<Context>>(derive: D): Ultra<
     Procedures,
     SocketData & ExtractDeriveUpgradeData<Context, D>,
@@ -111,13 +110,14 @@ export class Ultra<
     return this as any;
   }
 
+  /** Build procedures and start servers */
   start(options?: StartOptions<SocketData>) {
     if (this.server) {
       console.warn('Server is already running');
       return this.server;
     }
 
-    const procedures = this.buildProcedures();
+    const { routes, handlers } = this.build();
 
     const notFoundHandler = this.wrapHandler(
       () => new Response('Not Found', { status: 404 }),
@@ -128,7 +128,7 @@ export class Ultra<
       ...(this.httpEnabled && {
         routes: {
           // Procedure routes
-          ...this.buildRoutes(procedures),
+          ...routes,
           '/ws': async (request, server) => {
             this.emit('http:request', request, server);
             if (!this.derivedUpgrade.size) {
@@ -161,18 +161,37 @@ export class Ultra<
         data: {} as SocketData,
         open: (ws) => { this.emit('ws:open', ws); },
         close: (ws, code, reason) => { this.emit('ws:close', ws, code, reason); },
-        message: (ws, message) => {
+        message: async (ws, message) => {
           this.emit('ws:message', ws, message);
           if (typeof message !== 'string') return;
           const data = JSON.parse(message);
-          if (isRPC(data)) this.handleRPC(ws, data);
+          if (!isRPC(data)) return;
+
+          const handler = handlers.get(data.method);
+          if (!handler) {
+            ws.send(`{"id": "${data.id}", "error": {"code": 404, "message": "Not found"}}`);
+            return;
+          };
+
+          try {
+            ws.send(toRPCResponse(data.id, await handler({
+              input: data.params,
+              context: this.derived.size
+                ? await this.enrichContext({ server: this.server!, ws })
+                : { server: this.server!, ws } as Context,
+            })));
+          }
+          catch (error) {
+            this.emit('error', error as ErrorLike);
+            ws.send(toRPCResponse(data.id, error));
+          }
         },
       },
 
       error: (error) => {
         this.emit('unhandled:error', error);
         console.error('Unhandled server error:', error);
-        return new Response('Internal Server Error', { status: 500 });
+        return new Response('Internal server error', { status: 500 });
       },
 
       ...options,
@@ -182,6 +201,7 @@ export class Ultra<
     return this.server;
   }
 
+  /** Stop server */
   async stop(closeActiveConnections = false) {
     if (!this.server) return console.error('Server is not running');
     await this.server.stop(closeActiveConnections);
@@ -202,26 +222,6 @@ export class Ultra<
   emit<E extends keyof ServerEventMap<SocketData>>(event: E, ...args: ServerEventMap<SocketData>[E]) {
     this.events.get(event)?.forEach(listener => listener(...args));
     return this;
-  }
-
-  protected async handleRPC(ws: ServerWebSocket<SocketData>, payload: Payload) {
-    const handler = this.handlers.get(payload.method);
-    // Not found procedure
-    if (!handler) {
-      ws.send(`{"id": "${payload.id}", "error": {"code": 404, "message": "Not found"}}`);
-      return;
-    };
-
-    try {
-      ws.send(toRPCResponse(payload.id, await handler({
-        input: payload.params,
-        context: await this.enrichContext({ server: this.server!, ws }),
-      })));
-    }
-    catch (error) {
-      this.emit('error', error as ErrorLike);
-      ws.send(toRPCResponse(payload.id, error));
-    }
   }
 
   /** Enrich context with derived values */
@@ -274,22 +274,23 @@ export class Ultra<
   }
 
   /** Wrap procedure handler with global middlewares */
-  protected wrapHandler(handler: ProcedureHandler<any, any, any>, middlewares: Set<Middleware<any, any, Context>>): ProcedureHandler<any, any, any> {
+  protected wrapHandler<I, O>(handler: ProcedureHandler<I, O, Context>, middlewares: Set<Middleware<I, O, Context>>): ProcedureHandler<I, any, Context> {
     if (!middlewares.size) return handler;
     const middlewaresArray = Array.from(middlewares);
-    return async (options: ProcedureOptions<any, Context>) => {
+    const length = middlewaresArray.length;
+    return async (options: ProcedureOptions<I, Context>) => {
       let idx = 0;
       const next = () => {
-        if (idx === middlewaresArray.length) return handler(options);
+        if (idx === length) return handler(options);
         return middlewaresArray[idx++]!({ ...options, next });
       };
       return next();
     };
   }
 
-  /** Build flat map from procedures tree and write handles map */
-  protected buildProcedures() {
-    const procedures = new Map<string, Procedure<any, any, Context>>();
+  protected build() {
+    const handlers = new Map<string, ProcedureHandler<any, any, Context>>();
+    const routes: BunRoutes = {};
 
     const inputFactory: InputFactory<Context> = <I>(schema?: Schema<I>) => {
       const procedure = new Procedure<I, unknown, Context>();
@@ -299,24 +300,22 @@ export class Ultra<
     };
 
     for (const [initializer, scopedMiddleware] of this.initializers) {
-      const map = initializer(inputFactory);
+      const map = initializer(inputFactory) as Procedures;
       const stack: Array<{ path: string; value: Procedure<any, any, Context> | ProceduresMap }> = [];
 
-      for (const [key, value] of Object.entries(map)) {
-        stack.push({ path: key, value: value as any });
+      for (const path in map) {
+        stack.push({ path, value: map[path]! });
       }
 
       while (stack.length) {
         const { path, value } = stack.pop()!;
 
         if (value instanceof Procedure) {
-          if (procedures.has(path)) throw new Error(`Procedure "${path}" already exists`);
+          if (handlers.has(path)) throw new Error(`Procedure "${path}" already exists`);
 
           const procedure = value.metadata();
 
           if (!this.httpEnabled && procedure.http?.enabled) this.httpEnabled = true;
-
-          procedures.set(path, value as Procedure<any, any, Context>);
 
           const middlewares = new Set([
             ...this.middlewares,
@@ -324,7 +323,78 @@ export class Ultra<
             ...procedure.middlewares,
           ]);
 
-          this.handlers.set(path, this.wrapHandler(value.compile(), middlewares));
+          const handler = this.wrapHandler(value.compile(), middlewares);
+
+          handlers.set(path, handler);
+
+          // Skip if HTTP is disabled
+          if (!procedure.http?.enabled) continue;
+
+          const httpPath = `/${path}`;
+
+          // ! Runtime logic edits may performance hit. Avoid adding logic that can be resolved at startup.
+          const HTTPHandler: BunRouteHandler = async (request: BunRequest, server: Server<SocketData>) => {
+            this.emit('http:request', request, server);
+
+            let input: any = request.body;
+
+            // Parse input
+            if (input) {
+              // Parse GET with query parameters
+              if (request.method === 'GET') {
+                const query = request.url.indexOf('?');
+                if (query !== -1 && query < request.url.length - 1) {
+                  input = Object.fromEntries(new URLSearchParams(request.url.slice(query + 1)).entries());
+                }
+              }
+              else {
+                // Have content
+                if (request.headers.get('Content-Length') !== '0') {
+                  const type = request.headers.get('Content-Type');
+                  if (type) {
+                    switch (true) {
+                      case type.startsWith('application/json'):
+                        input = await request.json();
+                        break;
+                      case type.startsWith('text'):
+                        input = await request.text();
+                        break;
+                      case type.startsWith('multipart/form-data'):
+                        input = await request.formData();
+                        break;
+                      default:
+                        console.error(`Unsupported Content-Type for procedure ${path}: ${type}`);
+                        break;
+                    }
+                  }
+                }
+              }
+            }
+
+            try {
+              return toHTTPResponse(await handler({
+                input,
+                context: this.derived.size
+                  ? await this.enrichContext({ server, request })
+                  : { server, request } as Context,
+              }));
+            }
+            catch (error) {
+              this.emit('error', error as ErrorLike);
+              return toHTTPResponse(error);
+            }
+          };
+
+          // If method is not specified, register route without method restriction
+          if (!procedure.http.method) {
+            routes[httpPath] = HTTPHandler;
+            continue;
+          }
+
+          // Register route with method restriction
+          if (!routes[httpPath]) routes[httpPath] = {};
+          (routes[httpPath] as Record<string, BunRouteHandler>)[procedure.http.method] = HTTPHandler;
+
           continue;
         }
 
@@ -335,85 +405,6 @@ export class Ultra<
       }
     }
 
-    return procedures;
-  }
-
-  /** Build Bun native HTTP routes */
-  protected buildRoutes(procedures: Map<string, Procedure<any, any, Context>>) {
-    const routes: BunRoutes = {};
-    for (const [path, procedure] of procedures) {
-      const metadata = procedure.metadata();
-      // Skip if HTTP is disabled
-      if (!metadata.http?.enabled) continue;
-
-      const httpPath = `/${path}`;
-
-      const handler = this.handlers.get(path);
-      if (!handler) throw new Error(`Handler for procedure at path "${path}" is not defined`);
-
-      // ! Runtime logic edits may performance hit. Avoid adding logic that can be resolved at startup.
-      const httpHandler: BunRouteHandler = async (request: BunRequest, server: Server<SocketData>) => {
-        this.emit('http:request', request, server);
-
-        let input: any = request.body;
-        const context = this.derived.size ? await this.enrichContext({ server, request }) : { server, request } as Context;
-
-        // Parse input
-        if (input) {
-          // Parse GET with query parameters
-          if (request.method === 'GET') {
-            const query = request.url.indexOf('?');
-            if (query !== -1 && query < request.url.length - 1) {
-              input = Object.fromEntries(new URLSearchParams(request.url.slice(query + 1)).entries());
-            }
-          }
-          else {
-            // Have content
-            if (request.headers.get('Content-Length') !== '0') {
-              const type = request.headers.get('Content-Type');
-              if (type) {
-                switch (true) {
-                  case type.startsWith('application/json'):
-                    input = await request.json();
-                    break;
-                  case type.startsWith('text'):
-                    input = await request.text();
-                    break;
-                  case type.startsWith('multipart/form-data'):
-                    input = await request.formData();
-                    break;
-                  default:
-                    console.error(`Unsupported Content-Type for procedure ${path}: ${type}`);
-                    break;
-                }
-              }
-            }
-          }
-        }
-
-        try {
-          return toHTTPResponse(await handler({
-            input,
-            context,
-          }));
-        }
-        catch (error) {
-          this.emit('error', error as ErrorLike);
-          return toHTTPResponse(error);
-        }
-      };
-
-      // If method is not specified, register route without method restriction
-      if (!metadata.http.method) {
-        routes[httpPath] = httpHandler;
-        continue;
-      }
-
-      // Register route with method restriction
-      if (!routes[httpPath]) routes[httpPath] = {};
-      (routes[httpPath] as Record<string, BunRouteHandler>)[metadata.http.method] = httpHandler;
-    }
-
-    return routes;
+    return { handlers, routes };
   }
 }

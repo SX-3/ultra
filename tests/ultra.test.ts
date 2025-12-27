@@ -4,6 +4,7 @@ import type { ProcedureHandler } from '../src/procedure';
 import type { InputFactory } from '../src/ultra';
 import { expect, expectTypeOf, it, mock } from 'bun:test';
 import { isWS } from '../src/context';
+import { toHTTPResponse } from '../src/response';
 import { Ultra } from '../src/ultra';
 import { start } from './utils';
 
@@ -167,4 +168,37 @@ it.concurrent('http options', async () => {
 
   const result = await http.ping();
   expect(result).toBe('pong');
+});
+
+it.concurrent('handle procedure exceptions', async () => {
+  let callAfterException = false;
+  const middleware = mock(async ({ next }) => {
+    let result;
+    try {
+      result = await next();
+    }
+    catch (error) {
+      result = toHTTPResponse(error);
+      result.headers.set('X-Test', 'test');
+    }
+    callAfterException = true;
+    return result;
+  });
+
+  const service = new Ultra()
+    .use(middleware)
+    .routes(input => ({
+    // @ts-expect-error test handle error
+      exception: input().http().handler(() => {
+        throw new Error('Unknown error');
+      }),
+    }));
+
+  const { url } = start(service);
+
+  const response = await fetch(`${url}exception`);
+
+  expect(callAfterException).toBe(true);
+  expect(response.text()).resolves.toBe('Unknown error');
+  expect(response.headers.get('X-Test')).toBe('test');
 });

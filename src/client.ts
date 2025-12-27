@@ -102,7 +102,7 @@ export function createHTTPClient<U extends Ultra<any, any, any>>(clientOptions: 
         headers,
       });
 
-      if (!response.ok) throw new Error(`HTTP error: ${response.statusText} ${response.status} `);
+      if (!response.ok) throw new Error(`${response.statusText} ${response.status}`);
       const type = response.headers.get('Content-Type') || '';
       switch (true) {
         case response.status === 204:
