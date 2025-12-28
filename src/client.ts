@@ -33,7 +33,7 @@ function proxyClient<P extends ProceduresMap, CO>(invoke: Invoke<CO>, path: stri
       const callOptions = args[1];
       return invoke(method, params, callOptions);
     },
-  }) as unknown as BuildClient<P, CO>;
+  }) as any;
 }
 
 function mergeHeaders(...sources: Array<HeadersInit | undefined>): Headers {

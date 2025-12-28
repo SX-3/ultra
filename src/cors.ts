@@ -1,5 +1,6 @@
 import type { BaseContext } from './context';
 import type { Middleware } from './middleware';
+import { isHTTP } from './context';
 import { toHTTPResponse } from './response';
 
 export interface CorsConfig {
@@ -48,7 +49,7 @@ export function createCORSMiddleware(config: CorsConfig): Middleware<unknown, un
 
   return async (options) => {
     // If not an HTTP protocol, skip CORS
-    if (!('request' in options.context)) return options.next();
+    if (!isHTTP(options.context)) return options.next();
 
     const origin = options.context.request.headers.get('Origin');
 

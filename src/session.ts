@@ -215,8 +215,7 @@ export class Session<
   }
 
   protected touch() {
-    // Is HTTP context
-    if ('request' in this.context) {
+    if (isHTTP(this.context)) {
       this.context.request.cookies.set(
         this.config.name,
         sign(this.sessionId, this.config.secret),

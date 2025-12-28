@@ -1,4 +1,4 @@
-import type { BaseContext, DeriveFunction } from '../src/context';
+import type { BaseContext } from '../src/context';
 import type { Middleware } from '../src/middleware';
 import type { ProcedureHandler } from '../src/procedure';
 import type { InputFactory } from '../src/ultra';
@@ -14,12 +14,12 @@ it.concurrent('deduplication', async () => {
     requestPayloads.push(options.input);
     return options.next();
   });
-  const authDeriveFunction = mock<DeriveFunction<any>>(() => ({ auth: true }));
+  const authDeriveFunction = mock(() => ({ auth: true }));
   const onServerStartedHandler = mock(() => {});
   const usersArray = ['user1', 'user2', 'user3'] as const;
   const usersListHandler = mock<ProcedureHandler<any, typeof usersArray, any>>(() => usersArray);
   const scopedMiddleware = mock<Middleware<any, any, BaseContext>>(options => options.next());
-  const usersRoutesInitializer = mock((input: InputFactory<BaseContext>) => ({
+  const usersRoutesInitializer = mock((input: InputFactory<any>) => ({
     users: {
       list: input().use(loggerMiddleware).http().handler(usersListHandler),
     },
@@ -127,7 +127,7 @@ it.concurrent('enriches context with derived values', async () => {
     .routes(input => ({
       ping: input().http().handler(({ context }) => {
         if (isWS(context)) {
-          expectTypeOf(context.ws.data).toMatchObjectType<{ session: string; another: string }>();
+          expectTypeOf(context.ws.data).toExtend<{ session: string; another: string }>();
           expect(context.ws.data).toMatchObject({ session: 'id', another: 'value' });
         }
 

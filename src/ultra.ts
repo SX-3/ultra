@@ -1,8 +1,9 @@
 import type { BunRequest, ErrorLike, Server, ServerWebSocket } from 'bun';
-import type { BaseContext, DeriveUpgradeValue, DeriveValue, ExtractDerive, ExtractDeriveUpgradeData, RebindSocketData } from './context';
+import type { BaseContext, DeriveRecord, DeriveUpgradeValue, DeriveValue, GetDerived, GetDerivedUpgradeData, ReplaceSocketData } from './context';
 import type { BunRouteHandler, BunRoutes } from './http';
 import type { Middleware } from './middleware';
 import type { ProcedureHandler, ProcedureOptions } from './procedure';
+import type { Simplify } from './types';
 import type { StandardSchemaV1 as Schema } from './validation';
 import { serve } from 'bun';
 import { Procedure } from './procedure';
@@ -41,9 +42,9 @@ export interface UltraOptions {
 }
 
 export class Ultra<
-  Procedures extends ProceduresMap = ProceduresMap,
-  SocketData = unknown,
-  Context extends BaseContext<SocketData> = BaseContext<SocketData>,
+  const Procedures extends ProceduresMap = ProceduresMap,
+  const SocketData extends DeriveRecord = DeriveRecord,
+  const Context extends BaseContext<SocketData> = BaseContext<SocketData>,
 > {
   protected readonly initializers = new Map<ProcedureMapInitializer<any, Context>, Set<Middleware<any, any, Context>>>();
   protected readonly events = new Map<keyof ServerEventMap<SocketData>, Set<ServerEventListener<SocketData, any>>>();
@@ -76,13 +77,13 @@ export class Ultra<
   /** Register middleware or another Ultra instance */
   use<
     const PluginProcedures extends ProceduresMap,
-    const PluginSocketData,
+    const PluginSocketData extends DeriveRecord,
     const PluginContext extends BaseContext<PluginSocketData>,
   >(entity: Middleware<any, any, Context> | Ultra<PluginProcedures, PluginSocketData, PluginContext>,
   ): Ultra<
-    Procedures & PluginProcedures,
-    SocketData & PluginSocketData,
-    RebindSocketData<Context, SocketData & PluginSocketData> & RebindSocketData<PluginContext, SocketData & PluginSocketData>
+    Simplify<Procedures & PluginProcedures>,
+    Simplify<SocketData & PluginSocketData>,
+    Simplify<ReplaceSocketData<Context & PluginContext, SocketData & PluginSocketData>>
   > {
     // If entity is a middleware, add to middlewares set
     if (typeof entity === 'function') {
@@ -95,7 +96,7 @@ export class Ultra<
   }
 
   /** Extends context values for every request with provided values */
-  derive<const D extends DeriveValue<Context>>(derive: D): Ultra<Procedures, SocketData, Context & ExtractDerive<Context, D>> {
+  derive<const D extends DeriveValue<Context>>(derive: D): Ultra<Procedures, SocketData, Simplify<Context & GetDerived<Context, D>>> {
     this.derived.add(derive);
     return this as any;
   }
@@ -103,8 +104,8 @@ export class Ultra<
   /** Extends socket data and return headers */
   deriveUpgrade<const D extends DeriveUpgradeValue<Context>>(derive: D): Ultra<
     Procedures,
-    SocketData & ExtractDeriveUpgradeData<Context, D>,
-    RebindSocketData<Context, SocketData & ExtractDeriveUpgradeData<Context, D>>
+    Simplify<SocketData & GetDerivedUpgradeData<Context, D>>,
+    Simplify<ReplaceSocketData<Context, Simplify<SocketData & GetDerivedUpgradeData<Context, D>>>>
   > {
     this.derivedUpgrade.add(derive);
     return this as any;
@@ -139,9 +140,12 @@ export class Ultra<
               return;
             }
 
-            const context = this.derived.size ? await this.enrichContext({ server, request }) : { server, request } as Context;
-            // @ts-expect-error Bun types
-            if (!server.upgrade(request, await this.enrichUpgrade(context))) {
+            if (!server.upgrade(
+              request,
+              // @ts-expect-error Bun types
+              await this.enrichUpgrade(this.derived.size ? await this.enrichContext({ server, request }) : { server, request } as any),
+            )
+            ) {
               return new Response('WebSocket upgrade failed', { status: 500 });
             };
           },
@@ -151,7 +155,7 @@ export class Ultra<
             this.emit('http:request', request, server);
             return notFoundHandler({
               input: null,
-              context: this.derived.size ? await this.enrichContext({ server, request }) : { server, request } as Context,
+              context: this.derived.size ? await this.enrichContext({ server, request }) : { server, request } as any,
             });
           },
         },
@@ -176,9 +180,7 @@ export class Ultra<
           try {
             ws.send(toRPCResponse(data.id, await handler({
               input: data.params,
-              context: this.derived.size
-                ? await this.enrichContext({ server: this.server!, ws })
-                : { server: this.server!, ws } as Context,
+              context: this.derived.size ? await this.enrichContext({ server: this.server!, ws }) : { server: this.server!, ws } as any,
             })));
           }
           catch (error) {
@@ -225,16 +227,16 @@ export class Ultra<
   }
 
   /** Enrich context with derived values */
-  protected async enrichContext(context: BaseContext<SocketData>): Promise<Context> {
+  protected async enrichContext<const C extends BaseContext>(context: C): Promise<Context> {
     // ? Derive sequentially to allow using previous derived values
     for (const derive of this.derived) {
       Object.assign(
         context,
-        typeof derive === 'function' ? await derive(context as Context) : derive,
+        typeof derive === 'function' ? await derive(context as any) : derive,
       );
     }
 
-    return context as Context;
+    return context as any;
   }
 
   /** Enrich upgrade options with derived values */
@@ -374,9 +376,7 @@ export class Ultra<
             try {
               return toHTTPResponse(await handler({
                 input,
-                context: this.derived.size
-                  ? await this.enrichContext({ server, request })
-                  : { server, request } as Context,
+                context: this.derived.size ? await this.enrichContext({ server, request }) : { server, request } as any,
               }));
             }
             catch (error) {

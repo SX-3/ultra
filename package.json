@@ -46,6 +46,7 @@
     "build": "tsdown",
     "dev": "tsdown --watch",
     "test": "bun test && bunx tsc --noEmit",
+    "trace:types": "bunx tsc --noEmit --target esnext --skipLibCheck --generateTrace trace ./tests/types-performance.ts",
     "lint": "eslint ."
   },
   "peerDependencies": {

@@ -81,5 +81,5 @@ export async function validate<T extends StandardSchemaV1>(
     throw new ValidationError(JSON.stringify(result.issues, null, 2));
   }
 
-  return result.value;
+  return (result as SuccessResult<InferOutput<T>>).value;
 }

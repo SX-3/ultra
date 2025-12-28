@@ -5,6 +5,7 @@ node_modules
 out
 dist
 *.tgz
+trace
 
 # code coverage
 coverage
