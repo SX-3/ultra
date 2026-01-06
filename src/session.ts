@@ -57,9 +57,9 @@ export interface SessionSocketData {
   sessionId: string;
 }
 
-export type SessionContext = BaseContext<{ sessionId: string }> & {
+export interface SessionContext extends BaseContext<{ sessionId: string }> {
   session: Session<any>;
-};
+}
 
 export function defineConfig<S extends Record<string, SessionStoreFactory>>(config: SessionConfig<S>): SessionConfig<S> {
   return {

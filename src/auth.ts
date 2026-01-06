@@ -20,9 +20,9 @@ interface AuthConfig<P extends Record<string, AuthProviderFactory> = Record<stri
   providers: P;
 }
 
-export type AuthContext<User> = BaseContext & {
+export interface AuthContext<User> extends BaseContext {
   auth: Auth<User>;
-};
+}
 
 export function defineConfig<
   User,
@@ -49,6 +49,7 @@ export const isGuest: Middleware<any, any, AuthContext<any>> = async (options) =
   if (await options.context.auth.check()) return new UnauthorizedError();
   return options.next();
 };
+
 export class Auth<
   User,
   Providers extends Record<string, AuthProviderFactory<User>> = Record<string, AuthProviderFactory<User>>,
@@ -138,27 +139,3 @@ export class SessionAuthProvider<User> implements AuthProvider<User> {
     this.context.session.set(this.sessionKey, user as JSONValue);
   }
 }
-
-/*
-interface DatabaseProviderOptions {
-  tableName?: string;
-  sessionKey?: string;
-}
-
-export class DatabaseAuthProvider<User extends JSONObject> implements AuthProvider<User> {
-  protected readonly context: AuthContext<User>;
-  protected readonly tableName: string;
-  protected readonly sessionKey: string;
-  protected cachedUser: User | null = null;
-
-  constructor(context: AuthContext<User>, options?: DatabaseProviderOptions) {
-    this.context = context;
-    this.tableName = options?.tableName || 'users';
-    this.sessionKey = options?.sessionKey || 'userId';
-  }
-
-  get user() {
-    return this.cachedUser;
-  }
-}
-*/
