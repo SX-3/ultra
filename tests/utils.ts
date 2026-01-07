@@ -3,7 +3,7 @@ import type { Result, StandardSchemaV1 } from '../src/validation';
 import { afterAll } from 'bun:test';
 import { createHTTPClient, createWebSocketClient } from '../src/client';
 
-let portCounter = 3000;
+let portCounter = 40000;
 const apps = new Set<Ultra>();
 const sockets = new Set<WebSocket>();
 

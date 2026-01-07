@@ -1,22 +1,22 @@
 import type { Procedure } from './procedure';
 import type { Result } from './rpc';
+import type { Simplify } from './types';
 import type { ProceduresMap, Ultra } from './ultra';
 
 type GetProcedures<T> = T extends Ultra<infer P, any, any> ? P : never;
 
-type BuildProcedure<P, CO> = P extends Procedure<infer I, infer O, any>
-  ? (undefined extends I
-      ? (input?: I, callOptions?: CO) => Promise<O>
-      : (input: I, callOptions?: CO) => Promise<O>)
-  : never;
+type ProcedureFunction<I, O, CO>
+  = undefined extends I
+    ? (input?: I, callOptions?: CO) => Promise<O>
+    : (input: I, callOptions?: CO) => Promise<O>;
 
-type BuildClient<P extends ProceduresMap, CO> = {
-  [K in keyof P]: P[K] extends Procedure<any, any, any>
-    ? BuildProcedure<P[K], CO>
-    : P[K] extends ProceduresMap
-      ? BuildClient<P[K], CO>
-      : never
-};
+type BuildClient<P, CO> = Simplify<{
+  [K in keyof P]: P[K] extends ProceduresMap
+    ? BuildClient<P[K], CO>
+    : P[K] extends Procedure<infer I, infer O, any>
+      ? ProcedureFunction<I, O, CO>
+      : never;
+}>;
 
 type Invoke<CO> = (method: string, params: unknown, callOptions?: CO) => Promise<unknown>;
 
