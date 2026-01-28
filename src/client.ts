@@ -1,5 +1,5 @@
 import type { Procedure } from './procedure';
-import type { Result } from './rpc';
+import type { Payload, Result } from './rpc';
 import type { JSONValue, Simplify } from './types';
 import type { ProceduresMap, Ultra } from './ultra';
 import { compress } from './compression';
@@ -172,12 +172,21 @@ interface WebSocketRequest {
   resolve: (value?: any) => void;
   reject: (reason?: any) => void;
   timeout: Timeout;
+  pending: boolean;
 }
 
 // Accept Ultra instances with any extended context/socket data while preserving procedure typing
 export function createWebSocketClient<U extends Ultra<any, any, any>>(clientOptions: WebSocketClientOptions) {
+  const {
+    retryCount = 3,
+    retryDelay = 1000,
+    batchSize = 99,
+    batchDelay = 0,
+    onBeforeSend,
+    compression,
+  } = clientOptions;
+
   const makeId = () => Math.random().toString(36);
-  const { retryCount = 3, retryDelay = 1000, batchSize = 99, batchDelay = 0, onBeforeSend, compression } = clientOptions;
   const requests: WebSocketRequest[] = [];
   let batchTimeout: Timeout | null = null;
 
@@ -222,14 +231,24 @@ export function createWebSocketClient<U extends Ultra<any, any, any>>(clientOpti
       setTimeout(send, retryDelay);
     });
 
-    const payloadString = JSON.stringify(requests.map(({ id, method, params }) => ({ id, method, params })));
+    const payloads: Payload[] = [];
+    for (const request of requests) {
+      if (request.pending) continue;
+      request.pending = true;
+      payloads.push({
+        id: request.id,
+        method: request.method,
+        params: request.params,
+      });
+    }
 
-    if (compression && payloadString.length >= compression) {
-      const text = new TextEncoder().encode(payloadString);
+    const string = JSON.stringify(payloads);
+    if (compression && string.length >= compression) {
+      const text = new TextEncoder().encode(string);
       compress(text).then(buffer => socket.send(onBeforeSend?.(buffer) ?? buffer));
     }
     else {
-      socket.send(onBeforeSend?.(payloadString) ?? payloadString);
+      socket.send(onBeforeSend?.(string) ?? string);
     }
   };
 
@@ -260,6 +279,7 @@ export function createWebSocketClient<U extends Ultra<any, any, any>>(clientOpti
       resolve: wrapWithClean(id, resolve),
       reject: wrapWithClean(id, reject),
       timeout: setTimeout(wrapWithClean(id, reject), options.timeout),
+      pending: false,
     });
 
     if (requests.length >= batchSize) send();
