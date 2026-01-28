@@ -32,7 +32,7 @@ type ServerEventListener<SD, K extends keyof ServerEventMap<SD>> = (...args: Ser
 
 type StartOptions<SD> = Partial<Bun.Serve.Options<SD>>;
 
-export type InputFactory<C> = <I>(schema?: Schema<I>) => Procedure<I, unknown, C>;
+export type InputFactory<C> = <I>(schema?: Schema<unknown, I>) => Procedure<I, unknown, C>;
 export type ProcedureMapInitializer<R extends ProceduresMap, C> = (input: InputFactory<C>) => R;
 
 export interface UltraOptions {
@@ -294,7 +294,7 @@ export class Ultra<
     const handlers = new Map<string, ProcedureHandler<any, any, Context>>();
     const routes: BunRoutes = {};
 
-    const inputFactory: InputFactory<Context> = <I>(schema?: Schema<I>) => {
+    const inputFactory: InputFactory<Context> = <I>(schema?: Schema<unknown, I>) => {
       const procedure = new Procedure<I, unknown, Context>();
       if (schema) procedure.input(schema);
       if (this.options.http?.enableByDefault) procedure.http();
