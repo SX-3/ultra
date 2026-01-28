@@ -38,20 +38,20 @@ import { Ultra } from '@sx3/ultra';
 // User module
 const users = new Ultra().routes(input => ({
   users: {
-    list: input().http().handler(() => [
+    list: input().http().handler(() => ([
       { id: 1, name: 'Alice' },
       { id: 2, name: 'Bob' }
-    ])
+    ]))
   }
 }));
 
 // Book module
 const books = new Ultra().routes(input => ({
   books: {
-    list: input().http().handler(() => [
+    list: input().http().handler(() => ([
       { id: 1, title: 'TypeScript' },
       { id: 2, title: 'Brave New World' }
-    ]),
+    ])),
   }
 }));
 

@@ -1,14 +1,18 @@
 import type { Procedure } from './procedure';
 import type { Result } from './rpc';
-import type { Simplify } from './types';
+import type { JSONValue, Simplify } from './types';
 import type { ProceduresMap, Ultra } from './ultra';
+import { compress } from './compression';
+
+type Timeout = ReturnType<typeof setTimeout>;
+type SocketMessage = string | Blob | ArrayBufferLike | ArrayBufferView<ArrayBufferLike>;
 
 type GetProcedures<T> = T extends Ultra<infer P, any, any> ? P : never;
 
 type ProcedureFunction<I, O, CO>
   = undefined extends I
-    ? (input?: I, callOptions?: CO) => Promise<O>
-    : (input: I, callOptions?: CO) => Promise<O>;
+    ? (input?: I, invokeOptions?: CO) => Promise<O>
+    : (input: I, invokeOptions?: CO) => Promise<O>;
 
 type BuildClient<P, CO> = Simplify<{
   [K in keyof P]: P[K] extends ProceduresMap
@@ -18,7 +22,7 @@ type BuildClient<P, CO> = Simplify<{
       : never;
 }>;
 
-type Invoke<CO> = (method: string, params: unknown, callOptions?: CO) => Promise<unknown>;
+type Invoke<CO> = (method: string, params: any, invokeOptions?: CO) => Promise<unknown>;
 
 function proxyClient<P extends ProceduresMap, CO>(invoke: Invoke<CO>, path: string[] = []): BuildClient<P, CO> {
   return new Proxy(() => {}, {
@@ -30,8 +34,8 @@ function proxyClient<P extends ProceduresMap, CO>(invoke: Invoke<CO>, path: stri
       if (!path.length) throw new Error('Cannot call client root; select a procedure first');
       const method = path.join('/');
       const params = args[0];
-      const callOptions = args[1];
-      return invoke(method, params, callOptions);
+      const invokeOptions = args[1];
+      return invoke(method, params, invokeOptions);
     },
   }) as any;
 }
@@ -49,19 +53,20 @@ function mergeHeaders(...sources: Array<HeadersInit | undefined>): Headers {
 
 interface HTTPClientOptions extends Omit<RequestInit, 'body'> {
   baseUrl: string;
+  /** @default 10 seconds */
   timeout?: number;
 }
 
 // Accept Ultra instances with any extended context/socket data while preserving procedure typing
 export function createHTTPClient<U extends Ultra<any, any, any>>(clientOptions: HTTPClientOptions) {
-  const invoke: Invoke<Partial<HTTPClientOptions>> = async (method, params, callOptions) => {
-    const options = { ...clientOptions, ...callOptions };
+  const invoke: Invoke<Partial<HTTPClientOptions>> = async (method, params, invokeOptions) => {
+    const options = { ...clientOptions, ...invokeOptions };
 
     const timeout = options?.timeout || 10000;
     const controller = new AbortController();
     const httpMethod = options?.method || 'POST';
     let url = `${options.baseUrl}/${method}`;
-    const headers = mergeHeaders(clientOptions?.headers, options?.headers, callOptions?.headers);
+    const headers = mergeHeaders(clientOptions?.headers, options?.headers, invokeOptions?.headers);
     let body: BodyInit | null = null;
 
     const abortTimeout = setTimeout(
@@ -128,47 +133,137 @@ export function createHTTPClient<U extends Ultra<any, any, any>>(clientOptions: 
 }
 
 interface WebSocketClientOptions {
+  /** Socket getter */
   socket: () => WebSocket | null;
+
+  /** @default 10000ms */
+  timeout?: number;
+  /**
+   * @default 99
+   * Set 1 for disable
+   */
+  batchSize?: number;
+
+  /** @default 0 */
+  batchDelay?: number;
+
+  /** @default 1000 characters */
+  compression?: number | false;
+
+  /** @default 3 */
+  retryCount?: number;
+
+  /** @default 1000ms */
+  retryDelay?: number;
+
+  /** Call before send, you can modify data */
+  onBeforeSend?: (data: SocketMessage) => SocketMessage | void;
+}
+
+interface WebSocketInvokeOptions {
   timeout?: number;
 }
 
-// Accept Ultra instances with any extended context/socket data while preserving procedure typing
-export function createWebSocketClient<U extends Ultra<any, any, any>>(options: WebSocketClientOptions) {
-  const { timeout = 10000 } = options;
-  const makeId = () => Math.random().toString(36);
+interface WebSocketRequest {
+  id: string;
+  method: string;
+  params: JSONValue;
+  options?: WebSocketInvokeOptions;
+  resolve: (value?: any) => void;
+  reject: (reason?: any) => void;
+  timeout: Timeout;
+}
 
-  const invoke: Invoke<Partial<WebSocketClientOptions>> = (method, params, callOptions) => {
-    const socket = options.socket();
-    if (!socket || socket.readyState !== WebSocket.OPEN) {
-      return Promise.reject(new Error('WebSocket is not open'));
+// Accept Ultra instances with any extended context/socket data while preserving procedure typing
+export function createWebSocketClient<U extends Ultra<any, any, any>>(clientOptions: WebSocketClientOptions) {
+  const makeId = () => Math.random().toString(36);
+  const { retryCount = 3, retryDelay = 1000, batchSize = 99, batchDelay = 0, onBeforeSend, compression } = clientOptions;
+  const requests: WebSocketRequest[] = [];
+  let batchTimeout: Timeout | null = null;
+
+  const send = (retry = 0) => {
+    if (batchTimeout !== null) {
+      clearTimeout(batchTimeout);
+      batchTimeout = null;
     }
 
-    const { promise, resolve, reject } = Promise.withResolvers();
-    const mergedTimeout = callOptions?.timeout ?? timeout;
-    let rejectTimeout: ReturnType<typeof setTimeout>;
-    const requestId = makeId();
+    if (!requests.length) return;
+
+    const socket = clientOptions.socket();
+
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+      if (retry >= retryCount) {
+        return requests.forEach((r) => {
+          clearTimeout(r.timeout);
+          r.reject('WebSocket is not open');
+        });
+      }
+      return setTimeout(() => send(retry + 1), retryDelay);
+    }
 
     const listener = (event: MessageEvent) => {
       try {
         const response: Result = JSON.parse(event.data);
-        if (response.id !== requestId) return;
-        clearTimeout(rejectTimeout);
-        socket.removeEventListener('message', listener);
-        if ('error' in response) return reject(response.error);
-        return resolve(response.result);
+        const request = requests.find(r => r.id === response.id);
+        if (!request) return;
+        clearTimeout(request.timeout);
+        if ('error' in response) request.reject(response.error);
+        else request.resolve(response.result);
+        if (!requests.length) socket.removeEventListener('message', listener);
       }
       catch (error) {
-        reject(error);
+        console.error('Client failed parse server message', error);
       }
     };
 
     socket.addEventListener('message', listener);
-    rejectTimeout = setTimeout(() => {
+    socket.addEventListener('close', () => {
       socket.removeEventListener('message', listener);
-      reject(`Timeout: ${mergedTimeout}`);
-    }, mergedTimeout);
+      setTimeout(send, retryDelay);
+    });
 
-    socket.send(JSON.stringify({ id: requestId, method, params }));
+    const payloadString = JSON.stringify(requests.map(({ id, method, params }) => ({ id, method, params })));
+
+    if (compression && payloadString.length >= compression) {
+      const text = new TextEncoder().encode(payloadString);
+      compress(text).then(buffer => socket.send(onBeforeSend?.(buffer) ?? buffer));
+    }
+    else {
+      socket.send(onBeforeSend?.(payloadString) ?? payloadString);
+    }
+  };
+
+  const wrapWithClean = <F extends (...any: any[]) => any>(id: string, fn: F) => {
+    return (...args: Parameters<F>) => {
+      const index = requests.findIndex(r => r.id === id);
+      if (index !== -1) {
+        clearTimeout(requests[index]!.timeout);
+        requests.splice(index, 1);
+      }
+
+      return fn(...args);
+    };
+  };
+
+  const invoke: Invoke<WebSocketInvokeOptions> = (method, params, invokeOptions) => {
+    const options = { timeout: 10000, ...clientOptions, ...invokeOptions };
+
+    const { promise, resolve, reject } = Promise.withResolvers();
+
+    const id = makeId();
+
+    requests.push({
+      id,
+      method,
+      params,
+      options,
+      resolve: wrapWithClean(id, resolve),
+      reject: wrapWithClean(id, reject),
+      timeout: setTimeout(wrapWithClean(id, reject), options.timeout),
+    });
+
+    if (requests.length >= batchSize) send();
+    else if (batchTimeout === null) batchTimeout = setTimeout(send, batchDelay);
 
     return promise;
   };

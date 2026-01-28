@@ -1,5 +1,5 @@
 import { describe, expect, expectTypeOf, it } from 'bun:test';
-import { createSuperClient } from '../src/client';
+import { createSuperClient, createWebSocketClient } from '../src/client';
 import { Ultra } from '../src/ultra';
 import { makeSchema, start } from './utils';
 
@@ -9,11 +9,11 @@ const string = makeSchema<string>(() => ({ value: 'hello' }));
 const app = new Ultra().routes(input => ({
   hello: input().http().handler(() => 'Hello World!' as const),
   echo: input<string>().http().handler(({ input }) => input),
-  validated: input(string).output(number).handler(() => 42),
+  validated: input(string).http().output(number).handler(() => 42),
 }));
 
 describe('clients', async () => {
-  const { ws, http, isReady } = start(app);
+  const { ws, http, isReady, wsUrl } = start(app);
 
   let isHTTP = false;
   const client = createSuperClient<typeof app>({
@@ -96,5 +96,52 @@ describe('clients', async () => {
     expectTypeOf(hello).toEqualTypeOf<'Hello World!'>();
     expectTypeOf(echo).toBeString();
     expectTypeOf(echo).toEqualTypeOf<string>();
+  });
+
+  describe('batching', async () => {
+    const socket = new WebSocket(wsUrl);
+    const { promise, resolve } = Promise.withResolvers();
+    socket.onopen = resolve;
+    await promise;
+
+    it('default', async () => {
+      const client = createWebSocketClient<typeof app>({
+        socket: () => socket,
+        onBeforeSend(data) {
+          if (typeof data !== 'string') return;
+          data = JSON.parse(data);
+          expect(data).toBeArray();
+          expect(data).toHaveLength(3);
+        },
+      });
+
+      const promises: Promise<any>[] = [];
+
+      promises.push(client.echo('One'));
+      promises.push(client.hello());
+      promises.push(client.echo('Three'));
+
+      const result = await Promise.all(promises);
+
+      expect(result).toEqual(['One', 'Hello World!', 'Three']);
+    });
+
+    it('compression', async () => {
+      const client = createWebSocketClient<typeof app>({
+        socket: () => socket,
+        compression: 100,
+        onBeforeSend(data) {
+          expect(data).not.toBeString();
+        },
+      });
+
+      const promises: Promise<any>[] = [];
+
+      for (let i = 0; i < 100; i++) {
+        promises.push(client.hello());
+      }
+
+      await Promise.all(promises);
+    });
   });
 });

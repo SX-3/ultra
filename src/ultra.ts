@@ -3,9 +3,11 @@ import type { BaseContext, DeriveRecord, DeriveUpgradeValue, DeriveValue, GetDer
 import type { BunRouteHandler, BunRoutes } from './http';
 import type { Middleware } from './middleware';
 import type { ProcedureHandler, ProcedureOptions } from './procedure';
+import type { Payload } from './rpc';
 import type { Simplify } from './types';
 import type { StandardSchemaV1 as Schema } from './validation';
-import { serve } from 'bun';
+import { inflateSync, serve } from 'bun';
+
 import { Procedure } from './procedure';
 import { toHTTPResponse, toRPCResponse } from './response';
 import { isRPC } from './rpc';
@@ -120,6 +122,8 @@ export class Ultra<
 
     const { routes, handlers } = this.build();
 
+    // ? Shared text decoder
+    const textDecoder = new TextDecoder();
     const notFoundHandler = this.wrapHandler(
       () => new Response('Not Found', { status: 404 }),
       this.middlewares,
@@ -167,25 +171,30 @@ export class Ultra<
         close: (ws, code, reason) => { this.emit('ws:close', ws, code, reason); },
         message: async (ws, message) => {
           this.emit('ws:message', ws, message);
-          if (typeof message !== 'string') return;
-          const data = JSON.parse(message);
-          if (!isRPC(data)) return;
 
-          const handler = handlers.get(data.method);
-          if (!handler) {
-            ws.send(`{"id": "${data.id}", "error": {"code": 404, "message": "Not found"}}`);
-            return;
-          };
+          let data: object | null = null;
 
           try {
-            ws.send(toRPCResponse(data.id, await handler({
-              input: data.params,
-              context: this.derived.size ? await this.enrichContext({ server: this.server!, ws }) : { server: this.server!, ws } as any,
-            })));
+            if (typeof message === 'string') {
+              data = JSON.parse(message);
+            }
+            else {
+              data = JSON.parse(textDecoder.decode(inflateSync(message)));
+            }
           }
           catch (error) {
-            this.emit('error', error as ErrorLike);
-            ws.send(toRPCResponse(data.id, error));
+            console.error('Message payload parsing failed', error);
+            return;
+          }
+
+          const rpcs = Array.isArray(data) ? data.filter(isRPC) : isRPC(data) ? [data] : null;
+
+          if (!rpcs || !rpcs.length) return;
+
+          const context = this.derived.size ? await this.enrichContext({ server: this.server!, ws }) : { server: this.server!, ws } as any;
+
+          for (const rpc of rpcs) {
+            this.handleRPC(handlers.get(rpc.method), ws, rpc, context);
           }
         },
       },
@@ -224,6 +233,24 @@ export class Ultra<
   emit<E extends keyof ServerEventMap<SocketData>>(event: E, ...args: ServerEventMap<SocketData>[E]) {
     this.events.get(event)?.forEach(listener => listener(...args));
     return this;
+  }
+
+  protected async handleRPC(handler: ProcedureHandler<unknown, unknown, Context> | undefined, ws: ServerWebSocket<SocketData>, rpc: Payload, context: Context) {
+    if (!handler) {
+      ws.send(`{"id": "${rpc.id}", "error": {"code": 404, "message": "Not found"}}`);
+      return;
+    }
+
+    try {
+      ws.send(toRPCResponse(rpc.id, await handler({
+        input: rpc.params,
+        context,
+      })));
+    }
+    catch (error) {
+      this.emit('error', error as ErrorLike);
+      ws.send(toRPCResponse(rpc.id, error));
+    }
   }
 
   /** Enrich context with derived values */

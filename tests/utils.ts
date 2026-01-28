@@ -30,11 +30,13 @@ export function start<T extends Ultra<any, any, any>>(app: T, port = portCounter
   apps.add(app);
   const instance = app.start({ port });
   const { promise, resolve } = Promise.withResolvers();
-  const socket = new WebSocket(`ws://localhost:${port}/ws`);
+  const wsUrl = `ws://localhost:${port}/ws`;
+  const socket = new WebSocket(wsUrl);
   socket.addEventListener('open', resolve);
   sockets.add(socket);
   return {
     url: instance.url.toString(),
+    wsUrl,
     port,
     http: createHTTPClient<T>({
       baseUrl: `http://localhost:${port}`,
