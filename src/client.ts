@@ -1,4 +1,4 @@
-import type { Procedure } from './procedure';
+import type { GetInput, GetOutput, Procedure } from './procedure';
 import type { Payload, Result } from './rpc';
 import type { JSONValue, Simplify } from './types';
 import type { ProceduresMap, Ultra } from './ultra';
@@ -6,28 +6,27 @@ import { compress } from './compression';
 
 type Timeout = ReturnType<typeof setTimeout>;
 type SocketMessage = string | Blob | ArrayBufferLike | ArrayBufferView<ArrayBufferLike>;
-
 type GetProcedures<T> = T extends Ultra<infer P, any, any> ? P : never;
 
-type ProcedureFunction<I, O, CO>
+type ClientFunction<I, O, IO>
   = undefined extends I
-    ? (input?: I, invokeOptions?: CO) => Promise<O>
-    : (input: I, invokeOptions?: CO) => Promise<O>;
+    ? (input?: GetInput<I>, invokeOptions?: IO) => Promise<GetOutput<O>>
+    : (input: GetInput<I>, invokeOptions?: IO) => Promise<GetOutput<O>>;
 
 type BuildClient<P, CO> = Simplify<{
   [K in keyof P]: P[K] extends ProceduresMap
     ? BuildClient<P[K], CO>
     : P[K] extends Procedure<infer I, infer O, any>
-      ? ProcedureFunction<I, O, CO>
+      ? ClientFunction<I, O, CO>
       : never;
 }>;
 
 type Invoke<CO> = (method: string, params: any, invokeOptions?: CO) => Promise<unknown>;
 
-function proxyClient<P extends ProceduresMap, CO>(invoke: Invoke<CO>, path: string[] = []): BuildClient<P, CO> {
+function proxyClient<P extends ProceduresMap, IO>(invoke: Invoke<IO>, path: string[] = []): BuildClient<P, IO> {
   return new Proxy(() => {}, {
     get(_, prop) {
-      if (typeof prop === 'string') return proxyClient<P, CO>(invoke, [...path, prop]);
+      if (typeof prop === 'string') return proxyClient<P, IO>(invoke, [...path, prop]);
     },
 
     apply(_, __, args) {
@@ -288,7 +287,7 @@ export function createWebSocketClient<U extends Ultra<any, any, any>>(clientOpti
     return promise;
   };
 
-  return proxyClient<GetProcedures<U>, Partial<WebSocketClientOptions>>(invoke);
+  return proxyClient<GetProcedures<U>, WebSocketInvokeOptions>(invoke);
 }
 
 type ClientsCallsParams = Partial<WebSocketClientOptions> | Partial<HTTPClientOptions>;

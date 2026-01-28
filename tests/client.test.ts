@@ -10,6 +10,7 @@ const app = new Ultra().routes(input => ({
   hello: input().http().handler(() => 'Hello World!' as const),
   echo: input<string>().http().handler(({ input }) => input),
   validated: input(string).http().output(number).handler(() => 42),
+  infer: input().handler(() => 81),
 }));
 
 describe('clients', async () => {
@@ -33,6 +34,7 @@ describe('clients', async () => {
     expectTypeOf(http.validated).toBeFunction();
     expectTypeOf(http.validated).returns.resolves.toEqualTypeOf<number>();
     expectTypeOf(http.validated).toBeCallableWith('some string');
+    expectTypeOf(http.infer).returns.resolves.toEqualTypeOf<number>();
 
     const [hello, echo] = await Promise.all([
       http.hello(),
@@ -58,6 +60,7 @@ describe('clients', async () => {
     expectTypeOf(ws.validated).toBeFunction();
     expectTypeOf(ws.validated).returns.resolves.toEqualTypeOf<number>();
     expectTypeOf(ws.validated).toBeCallableWith('some string');
+    expectTypeOf(ws.infer).returns.resolves.toEqualTypeOf<number>();
 
     const [hello, echo] = await Promise.all([
       ws.hello(),
