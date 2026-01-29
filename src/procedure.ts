@@ -26,7 +26,7 @@ export interface HTTPOptions {
  * @generic C is context
  */
 export class Procedure<I = unknown, O = unknown, C = unknown> {
-  protected readonly middlewares = new Set<Middleware<I, O, C>>();
+  protected readonly middlewares = new Set<Middleware<GetOutput<I>, GetOutput<O>, C>>();
   protected inputSchema?: Schema<I>;
   protected outputSchema?: Schema<O>;
   protected handlerFunction?: ProcedureHandler<I, O, C>;
@@ -68,7 +68,7 @@ export class Procedure<I = unknown, O = unknown, C = unknown> {
   }
 
   /** Add middleware to the procedure */
-  use(middleware: Middleware<I, O, C>) {
+  use(middleware: Middleware<GetOutput<I>, GetOutput<O>, C>) {
     this.middlewares.add(middleware);
     return this;
   }

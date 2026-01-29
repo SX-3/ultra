@@ -21,6 +21,11 @@ const app = new Ultra().routes(input => ({
     login: input(LoginSchema)
       .output(UserSchema)
       .http()
+      // eslint-disable-next-line unused-imports/no-unused-vars
+      .use(({ input, next }) => {
+        expectTypeOf<typeof input>().toEqualTypeOf<{ username: string; password: string }>();
+        return next();
+      })
       .handler(({ input }) => {
         expect(input).toContainAllKeys(['username', 'password']);
         expectTypeOf(input).toEqualTypeOf<{ username: string; password: string }>();
