@@ -39,3 +39,5 @@ export function isHTTP<SD>(context: BaseContext<SD>): context is HTTPContext<SD>
 export function isWS<SD>(context: BaseContext<SD>): context is WSContext<SD> {
   return 'ws' in context;
 }
+
+export type AnyContext<SD> = HTTPContext<SD> | WSContext<SD>;

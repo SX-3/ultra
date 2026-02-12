@@ -1,12 +1,26 @@
-import type { BunRequest, ErrorLike, Server, ServerWebSocket } from 'bun';
-import type { BaseContext, DeriveRecord, DeriveUpgradeValue, DeriveValue, GetDerived, GetDerivedUpgradeData, ReplaceSocketData } from './context';
+/* eslint-disable ts/no-empty-object-type */
+import type {
+  BunRequest,
+  ErrorLike,
+  Server,
+  ServerWebSocket,
+} from 'bun';
+import type {
+  AnyContext,
+  BaseContext,
+  DeriveRecord,
+  DeriveUpgradeValue,
+  DeriveValue,
+  GetDerived,
+  GetDerivedUpgradeData,
+  ReplaceSocketData,
+} from './context';
 import type { BunRouteHandler, BunRoutes } from './http';
 import type { Middleware } from './middleware';
 import type { ProcedureHandler, ProcedureOptions } from './procedure';
 import type { Payload } from './rpc';
 import type { Simplify } from './types';
 import { inflateSync, serve } from 'bun';
-
 import { Procedure } from './procedure';
 import { toHTTPResponse, toRPCResponse } from './response';
 import { isRPC } from './rpc';
@@ -43,7 +57,7 @@ export interface UltraOptions {
 }
 
 export class Ultra<
-  const Procedures extends ProceduresMap = ProceduresMap,
+  const Procedures extends ProceduresMap = {},
   const SocketData extends DeriveRecord = DeriveRecord,
   const Context extends BaseContext<SocketData> = BaseContext<SocketData>,
 > {
@@ -57,7 +71,8 @@ export class Ultra<
   };
 
   protected httpEnabled = false;
-  protected server?: Server<SocketData>;
+  protected server: Server<SocketData> | null = null;
+  protected handlers: Map<string, ProcedureHandler<unknown, unknown, Context>> | null = null;
 
   constructor(options?: UltraOptions) {
     if (options) this.options = { ...this.options, ...options };
@@ -68,7 +83,7 @@ export class Ultra<
   routes<const P extends ProceduresMap>(
     initializer: ProcedureMapInitializer<P, Context>,
     middlewares?: Middleware<any, any, Context>[],
-  ): Ultra<Procedures & P, SocketData, Context> {
+  ): Ultra<Simplify<Procedures & P>, SocketData, Context> {
     const existed = this.initializers.get(initializer);
     if (!existed) this.initializers.set(initializer, new Set(middlewares));
     else middlewares?.forEach(mw => existed.add(mw));
@@ -120,6 +135,7 @@ export class Ultra<
     }
 
     const { routes, handlers } = this.build();
+    this.handlers = handlers;
 
     // ? Shared text decoder
     const textDecoder = new TextDecoder();
@@ -146,7 +162,8 @@ export class Ultra<
             if (!server.upgrade(
               request,
               // @ts-expect-error Bun types
-              await this.enrichUpgrade(this.derived.size ? await this.enrichContext({ server, request }) : { server, request } as any),
+              await this.enrichContext({ server, request })
+                .then(ctx => this.enrichUpgrade(ctx)),
             )
             ) {
               return new Response('WebSocket upgrade failed', { status: 500 });
@@ -158,7 +175,7 @@ export class Ultra<
             this.emit('http:request', request, server);
             return notFoundHandler({
               input: null,
-              context: this.derived.size ? await this.enrichContext({ server, request }) : { server, request } as any,
+              context: await this.enrichContext({ server, request }),
             });
           },
         },
@@ -170,7 +187,6 @@ export class Ultra<
         close: (ws, code, reason) => { this.emit('ws:close', ws, code, reason); },
         message: async (ws, message) => {
           this.emit('ws:message', ws, message);
-
           let data: object | null = null;
 
           try {
@@ -190,10 +206,10 @@ export class Ultra<
 
           if (!rpcs || !rpcs.length) return;
 
-          const context = this.derived.size ? await this.enrichContext({ server: this.server!, ws }) : { server: this.server!, ws } as any;
+          const context = await this.enrichContext({ server: this.server!, ws });
 
           for (const rpc of rpcs) {
-            this.handleRPC(handlers.get(rpc.method), ws, rpc, context);
+            this.handleRPC(rpc, ws, context);
           }
         },
       },
@@ -216,6 +232,8 @@ export class Ultra<
     if (!this.server) return console.error('Server is not running');
     await this.server.stop(closeActiveConnections);
     this.emit('server:stopped', this.server, closeActiveConnections);
+    this.server = null;
+    this.handlers = null;
   }
 
   on<E extends keyof ServerEventMap<SocketData>>(event: E, listener: ServerEventListener<SocketData, E>) {
@@ -234,17 +252,18 @@ export class Ultra<
     return this;
   }
 
-  protected async handleRPC(handler: ProcedureHandler<unknown, unknown, Context> | undefined, ws: ServerWebSocket<SocketData>, rpc: Payload, context: Context) {
+  protected async handleRPC(rpc: Payload, ws: ServerWebSocket<SocketData>, context: Context) {
+    const handler = this.handlers!.get(rpc.method);
     if (!handler) {
       ws.send(`{"id": "${rpc.id}", "error": {"code": 404, "message": "Not found"}}`);
       return;
     }
 
     try {
-      ws.send(toRPCResponse(rpc.id, await handler({
-        input: rpc.params,
-        context,
-      })));
+      ws.send(toRPCResponse(
+        rpc.id,
+        await handler({ input: rpc.params, context }),
+      ));
     }
     catch (error) {
       this.emit('error', error as ErrorLike);
@@ -253,7 +272,7 @@ export class Ultra<
   }
 
   /** Enrich context with derived values */
-  protected async enrichContext<const C extends BaseContext>(context: C): Promise<Context> {
+  protected async enrichContext<const C extends AnyContext<SocketData>>(context: C): Promise<Context> {
     // ? Derive sequentially to allow using previous derived values
     for (const derive of this.derived) {
       Object.assign(
@@ -402,7 +421,7 @@ export class Ultra<
             try {
               return toHTTPResponse(await handler({
                 input,
-                context: this.derived.size ? await this.enrichContext({ server, request }) : { server, request } as any,
+                context: await this.enrichContext({ server, request }),
               }));
             }
             catch (error) {

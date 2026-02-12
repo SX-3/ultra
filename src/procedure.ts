@@ -14,6 +14,8 @@ export type ProcedureHandler<I, O, C> = (options: ProcedureOptions<I, C>) => Pro
 
 export type GetInput<I> = I extends Schema ? InferInput<I> : I;
 export type GetOutput<O> = O extends Schema ? InferOutput<O> : O;
+export type ProcedureOutput<T> = T extends Procedure<any, infer O, any> ? GetOutput<O> : never;
+export type ProcedureToOptions<T> = T extends Procedure<infer I, any, infer C> ? ProcedureOptions<I, C> : never;
 
 export interface HTTPOptions {
   enabled?: boolean;
