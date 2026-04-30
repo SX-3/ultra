@@ -1,8 +1,8 @@
 import type { SessionContext } from '../src/session';
 import { describe, expect, expectTypeOf, it } from 'bun:test';
 import { Auth, createAuthModule, defineConfig, isAuthenticated, SessionAuthProvider } from '../src/auth';
-import { createSessionModule, defineConfig as defineSessionConfig, MemorySessionStore } from '../src/session';
 
+import { createSessionModule, defineConfig as defineSessionConfig, MemorySessionStore } from '../src/session';
 import { Ultra } from '../src/ultra';
 import { start } from './utils';
 
@@ -11,14 +11,7 @@ interface User {
   name: string;
 }
 
-const config = defineConfig<User>({
-  provider: 'session',
-  providers: {
-    session: context => new SessionAuthProvider(context as SessionContext),
-  },
-});
-
-const sessionConfig = defineSessionConfig({
+const session = createSessionModule(defineSessionConfig({
   name: 'session',
   ttlSec: 100,
   secret: '213123',
@@ -30,13 +23,20 @@ const sessionConfig = defineSessionConfig({
   stores: {
     memory: config => new MemorySessionStore(config),
   },
-});
+}));
+
+const auth = createAuthModule<User>(defineConfig<User>({
+  provider: 'session',
+  providers: {
+    session: context => new SessionAuthProvider(context as SessionContext),
+  },
+}));
 
 const app = new Ultra()
-  .use(createSessionModule(sessionConfig))
-  .use(createAuthModule<User>(config))
+  .use(session)
+  .use(auth)
   .routes(input => ({
-    ping: input().http().handler(({ context }) => {
+    ping: input().http().handler(async ({ context }) => {
       expectTypeOf(context.auth).toExtend<Auth<any, any>>();
       expect(context.auth).toBeInstanceOf(Auth);
       return 'pong';
@@ -60,8 +60,8 @@ describe.concurrent('auth', async () => {
   });
 
   it('should protect route with isAuthenticated middleware', async () => {
-    await expect(http.me()).rejects.toThrowError();
-    await expect(ws.me()).rejects.toThrowError();
+    expect(http.me()).rejects.toThrowError();
+    expect(ws.me()).rejects.toThrowError();
   });
 
   it('should login user and access protected route', async () => {
