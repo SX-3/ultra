@@ -59,12 +59,14 @@ describe('CORS middleware integration', async () => {
 
     expect(res.status).toBe(200);
     expect(await res.text()).toEqual('pong');
+    // Non-preflight responses: only Allow-Origin + optional credentials/expose.
     expect(res.headers.get('Access-Control-Allow-Origin')).toBe(ALLOWED_ORIGIN);
-    expect(res.headers.get('Access-Control-Allow-Methods')).toBe('GET, POST');
-    expect(res.headers.get('Access-Control-Allow-Headers')).toBe('X-Test');
     expect(res.headers.get('Access-Control-Expose-Headers')).toBe('X-Expose');
     expect(res.headers.get('Access-Control-Allow-Credentials')).toBe('true');
-    expect(res.headers.get('Access-Control-Max-Age')).toBe('99');
+    // Preflight-only headers MUST NOT leak into regular responses.
+    expect(res.headers.get('Access-Control-Allow-Methods')).toBeNull();
+    expect(res.headers.get('Access-Control-Allow-Headers')).toBeNull();
+    expect(res.headers.get('Access-Control-Max-Age')).toBeNull();
   });
 
   it.concurrent('passes through without CORS headers for disallowed origin', async () => {
@@ -96,22 +98,23 @@ describe('CORS middleware integration', async () => {
       headers: { Origin: ALLOWED_ORIGIN },
     });
     expect(res.status).toBe(500);
+    // Even on errors, only safe response headers should be present.
     expect(res.headers.get('Access-Control-Allow-Origin')).toBe(ALLOWED_ORIGIN);
-    expect(res.headers.get('Access-Control-Allow-Methods')).toBe('GET, POST');
-    expect(res.headers.get('Access-Control-Allow-Headers')).toBe('X-Test');
     expect(res.headers.get('Access-Control-Expose-Headers')).toBe('X-Expose');
     expect(res.headers.get('Access-Control-Allow-Credentials')).toBe('true');
-    expect(res.headers.get('Access-Control-Max-Age')).toBe('99');
+    expect(res.headers.get('Access-Control-Allow-Methods')).toBeNull();
+    expect(res.headers.get('Access-Control-Allow-Headers')).toBeNull();
+    expect(res.headers.get('Access-Control-Max-Age')).toBeNull();
 
     const res2 = await fetch(`${url}/exception2`, {
       headers: { Origin: ALLOWED_ORIGIN },
     });
     expect(res2.status).toBe(500);
     expect(res2.headers.get('Access-Control-Allow-Origin')).toBe(ALLOWED_ORIGIN);
-    expect(res2.headers.get('Access-Control-Allow-Methods')).toBe('GET, POST');
-    expect(res2.headers.get('Access-Control-Allow-Headers')).toBe('X-Test');
     expect(res2.headers.get('Access-Control-Expose-Headers')).toBe('X-Expose');
     expect(res2.headers.get('Access-Control-Allow-Credentials')).toBe('true');
-    expect(res2.headers.get('Access-Control-Max-Age')).toBe('99');
+    expect(res2.headers.get('Access-Control-Allow-Methods')).toBeNull();
+    expect(res2.headers.get('Access-Control-Allow-Headers')).toBeNull();
+    expect(res2.headers.get('Access-Control-Max-Age')).toBeNull();
   });
 });

@@ -12,39 +12,25 @@ export interface CorsConfig {
   maxAge?: number;
 }
 
-const DEFAULT_HEADERS = {
+const PREFLIGHT_DEFAULTS: Record<string, string> = {
   'Access-Control-Allow-Methods': ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'].join(', '),
-
-  // Safe default headers
-  'Access-Control-Allow-Headers': [
-    'Accept-Language',
-    'Accept',
-    'Content-Type',
-    'Content-Language',
-    'Range',
-  ].join(', '),
-
-  'Access-Control-Expose-Headers': [
-    'Cache-Control',
-    'Content-Language',
-    'Content-Type',
-    'Expires',
-    'Last-Modified',
-    'Pragma',
-  ].join(', '),
-
-  // 1 hour
+  'Access-Control-Allow-Headers': ['Content-Type', 'Authorization'].join(', '),
   'Access-Control-Max-Age': '3600',
-} as const;
+};
 
 export function createCORSMiddleware(config: CorsConfig): Middleware<unknown, unknown, BaseContext> {
-  const cachedHeaders: Record<string, string> = {
-    ...DEFAULT_HEADERS,
+  // Preflight-only headers — only meaningful on OPTIONS responses per the Fetch spec.
+  // https://fetch.spec.whatwg.org/#http-access-control-allow-methods
+  const preflightHeaders: Record<string, string> = {
+    ...PREFLIGHT_DEFAULTS,
     ...(config.methods?.length && { 'Access-Control-Allow-Methods': config.methods.join(', ') }),
     ...(config.allowedHeaders?.length && { 'Access-Control-Allow-Headers': config.allowedHeaders.join(', ') }),
+    ...(config.maxAge !== undefined && { 'Access-Control-Max-Age': config.maxAge.toString() }),
+  };
+
+  const responseHeaders: Record<string, string> = {
     ...(config.exposedHeaders?.length && { 'Access-Control-Expose-Headers': config.exposedHeaders.join(', ') }),
     ...((config.credentials && !config.origin.includes('*')) && { 'Access-Control-Allow-Credentials': 'true' }),
-    ...(config.maxAge && { 'Access-Control-Max-Age': config.maxAge.toString() }),
   };
 
   return async (options) => {
@@ -56,13 +42,13 @@ export function createCORSMiddleware(config: CorsConfig): Middleware<unknown, un
     // If no origin or not allowed, skip CORS
     if (!origin || !config.origin.includes(origin)) return options.next();
 
-    // Preflight request
     if (options.context.request.method === 'OPTIONS') {
       return new Response(null, {
         status: 204,
         headers: {
           'Access-Control-Allow-Origin': origin,
-          ...cachedHeaders,
+          ...preflightHeaders,
+          ...responseHeaders,
         },
       });
     }
@@ -75,9 +61,11 @@ export function createCORSMiddleware(config: CorsConfig): Middleware<unknown, un
       response = toHTTPResponse(error);
     }
 
-    // Set CORS headers
     response.headers.set('Access-Control-Allow-Origin', origin);
-    for (const header in cachedHeaders) response.headers.set(header, cachedHeaders[header]!);
+    for (const header in responseHeaders) {
+      response.headers.set(header, responseHeaders[header]!);
+    }
+
     return response;
   };
 }
