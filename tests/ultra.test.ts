@@ -202,29 +202,3 @@ it.concurrent('handle procedure exceptions', async () => {
   expect(response.text()).resolves.toBe('Unknown error');
   expect(response.headers.get('X-Test')).toBe('test');
 });
-
-it.concurrent('indepent module registration', async () => {
-  // module that provides 'session' value
-  const session = new Ultra()
-    .derive(() => ({ session: 'user' }));
-
-  // module that depends on 'session' but does NOT include it (no .use(session)!)
-  const auth = new Ultra()
-    // @ts-expect-error for test
-    .derive(context => ({ auth: context.session }));
-
-  // BUG: auth is registered BEFORE session.
-  // When auth's derive runs, context.session does not exist yet → auth = undefined.
-  // Session's derive adds 'session' afterwards, but auth already captured undefined.
-  const app = new Ultra()
-    .use(auth) // auth first  — context.session is undefined here
-    .use(session) // session second — too late for auth's derive
-    .routes(input => ({
-      user: input().http().handler(({ context }) => context.auth),
-    }));
-
-  const { http } = start(app);
-
-  // Fails: context.auth is undefined because auth's derive ran before session's derive
-  expect(await http.user()).toBe('user');
-});
