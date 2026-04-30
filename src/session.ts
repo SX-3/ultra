@@ -33,7 +33,7 @@ interface SessionCookieOptions {
 }
 
 /** Factory for create session store  */
-export type SessionStoreFactory = (config: SessionConfig<any>, context: BaseContext) => SessionStore;
+export type SessionStoreFactory = (config: SessionConfig<any>) => SessionStore;
 
 export interface SessionConfig<
   S extends Record<string, SessionStoreFactory> = Record<string, SessionStoreFactory>,
@@ -77,6 +77,8 @@ export function defineConfig<S extends Record<string, SessionStoreFactory>>(conf
 
 /** Extends context and socket data, initiate session instance every request */
 export function createSessionModule<S extends Record<string, SessionStoreFactory>>(config: SessionConfig<S>) {
+  const store = config.stores[config.store]!(config);
+
   return new Ultra()
     .deriveUpgrade((context) => {
       const id = Session.getOrCreateId((context as HTTPContext).request, config);
@@ -85,7 +87,7 @@ export function createSessionModule<S extends Record<string, SessionStoreFactory
         data: { sessionId: id },
       };
     })
-    .derive(context => ({ session: new Session(config, context) }))
+    .derive(context => ({ session: new Session(config, context, store) }))
     .use(async ({ context, next }) => {
       await context.session.initiate();
       const response = await next();
@@ -118,10 +120,10 @@ export class Session<
   protected sessionState: JSONObject | null = null;
   protected modified = false;
 
-  constructor(config: SessionConfig<Stores>, context: BaseContext) {
+  constructor(config: SessionConfig<Stores>, context: BaseContext, store: SessionStore) {
     this.config = config;
     this.context = context;
-    this.store = config.stores[config.store]!(config, context);
+    this.store = store;
 
     switch (true) {
       case isHTTP(context): {
@@ -260,8 +262,8 @@ export class RedisSessionStore implements SessionStore {
   }
 }
 
-const memoryStore = new Map<string, { data: SessionData; touched: number }>();
 export class MemorySessionStore implements SessionStore {
+  protected readonly sessions = new Map<string, { data: SessionData; touched: number }>();
   protected readonly config: SessionConfig<any>;
   protected readonly sweepIntervalMs: number;
   protected readonly ttlMs: number;
@@ -275,30 +277,30 @@ export class MemorySessionStore implements SessionStore {
 
   read(sessionId: string) {
     this.maybeSweep();
-    return memoryStore.get(sessionId)?.data ?? null;
+    return this.sessions.get(sessionId)?.data ?? null;
   }
 
   write(sessionId: string, data: SessionData) {
     this.maybeSweep();
-    memoryStore.set(sessionId, { data, touched: Date.now() });
+    this.sessions.set(sessionId, { data, touched: Date.now() });
   }
 
   destroy(sessionId: string) {
     this.maybeSweep();
-    memoryStore.delete(sessionId);
+    this.sessions.delete(sessionId);
   }
 
   touch(sessionId: string) {
     this.maybeSweep();
-    const entry = memoryStore.get(sessionId);
+    const entry = this.sessions.get(sessionId);
     if (entry) entry.touched = Date.now();
   }
 
   protected maybeSweep(now = Date.now()) {
     if (now - this.lastSweepAt < this.sweepIntervalMs) return;
     this.lastSweepAt = now;
-    for (const [sessionId, entry] of memoryStore) {
-      if (now - entry.touched > this.ttlMs) memoryStore.delete(sessionId);
+    for (const [sessionId, entry] of this.sessions) {
+      if (now - entry.touched > this.ttlMs) this.sessions.delete(sessionId);
     }
   }
 }
