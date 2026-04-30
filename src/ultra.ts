@@ -21,6 +21,7 @@ import type { ProcedureHandler, ProcedureOptions } from './procedure';
 import type { Payload } from './rpc';
 import type { Simplify } from './types';
 import { inflateSync, serve } from 'bun';
+import { NotFoundError } from './error';
 import { Procedure } from './procedure';
 import { toHTTPResponse, toRPCResponse } from './response';
 import { isRPC } from './rpc';
@@ -255,7 +256,7 @@ export class Ultra<
   protected async handleRPC(rpc: Payload, ws: ServerWebSocket<SocketData>, context: Context) {
     const handler = this.handlers!.get(rpc.method);
     if (!handler) {
-      ws.send(`{"id": "${rpc.id}", "error": {"code": 404, "message": "Not found"}}`);
+      ws.send(toRPCResponse(rpc.id, new NotFoundError()));
       return;
     }
 
@@ -272,13 +273,13 @@ export class Ultra<
   }
 
   /** Enrich context with derived values */
-  protected async enrichContext<const C extends AnyContext<SocketData>>(context: C): Promise<Context> {
+  protected async enrichContext<C extends AnyContext<SocketData>>(context: C): Promise<Context> {
     // ? Derive sequentially to allow using previous derived values
     for (const derive of this.derived) {
-      Object.assign(
-        context,
-        typeof derive === 'function' ? await derive(context as any) : derive,
-      );
+      context = {
+        ...context,
+        ...(typeof derive === 'function' ? await derive(context as any) : derive),
+      };
     }
 
     return context as any;
@@ -291,7 +292,7 @@ export class Ultra<
     // ? Derive sequentially to allow using previous derived values
     for (const derive of this.derivedUpgrade) {
       const result = typeof derive === 'function' ? await derive(context) : derive;
-      if ('data' in result) Object.assign(options.data, result.data);
+      if ('data' in result) options.data = { ...options.data, ...result.data };
       if ('headers' in result) {
         for (const [key, value] of Object.entries(result.headers)) {
           options.headers.set(key, value);
