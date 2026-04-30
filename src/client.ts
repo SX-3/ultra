@@ -1,8 +1,9 @@
 import type { GetInput, GetOutput, Procedure } from './procedure';
-import type { Payload, Result } from './rpc';
+import type { Payload } from './rpc';
 import type { JSONValue, Simplify } from './types';
 import type { ProceduresMap, Ultra } from './ultra';
 import { compress } from './compression';
+import { isRPCResponse } from './rpc';
 
 type Timeout = ReturnType<typeof setTimeout>;
 type SocketMessage = string | Blob | ArrayBufferLike | ArrayBufferView<ArrayBufferLike>;
@@ -178,7 +179,8 @@ export function createWebSocketClient<U extends Ultra<any, any, any>>(clientOpti
     const ws = event.target as WebSocket;
 
     try {
-      const response: Result = JSON.parse(event.data);
+      const response = JSON.parse(event.data);
+      if (!isRPCResponse(response)) return;
       const request = requests.get(response.id);
       if (!request || request.ws !== ws) return;
 
