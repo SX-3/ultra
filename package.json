@@ -7,6 +7,9 @@
   "author": "SX3",
   "license": "MIT",
   "homepage": "https://github.com/SX-3/ultra",
+  "engines": {
+    "bun": ">=1.0.0"
+  },
   "repository": {
     "type": "git",
     "url": "https://github.com/SX-3/ultra"

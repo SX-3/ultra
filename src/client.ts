@@ -140,12 +140,6 @@ interface WebSocketClientOptions {
   /** @default 1000 characters */
   compression?: number | false;
 
-  /** @default 3 */
-  retryCount?: number;
-
-  /** @default 1000ms */
-  retryDelay?: number;
-
   /** Call before send, you can modify data */
   onBeforeSend?: (data: SocketMessage) => SocketMessage | void;
 }
@@ -203,9 +197,10 @@ export function createWebSocketClient<U extends Ultra<any, any, any>>(clientOpti
   const onClose = (event: Event) => {
     const ws = event.target as WebSocket;
     ws.removeEventListener('message', onMessage);
-    for (const [_, request] of requests) {
-      if (ws === request.ws) request.reject('Socket close');
-    }
+    requests
+      .values()
+      .filter(request => request.ws === ws)
+      .forEach(request => request.reject('Socket close'));
   };
 
   const wrapWithClean = <F extends (...any: any[]) => any>(id: string, fn: F) => {
