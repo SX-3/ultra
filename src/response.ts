@@ -11,7 +11,7 @@ export function toHTTPResponse(data: unknown): Response {
       return new Response(data.message, { status: 500 });
     case typeof data === 'object':
       return Response.json(data);
-    case !data:
+    case data === null || data === undefined:
       return new Response(null, { status: 204 });
     default:
       return new Response(String(data));

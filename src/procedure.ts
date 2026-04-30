@@ -84,13 +84,13 @@ export class Procedure<I = unknown, O = unknown, C = unknown> {
 
     // Apply input/output validation
     switch (true) {
-      // Validate only input
+      // Validate only output
       case !this.inputSchema: {
         const previous = composed;
         composed = async options => validate(this.outputSchema!, await previous(options));
         break;
       }
-      // Validate only output
+      // Validate only input
       case !this.outputSchema: {
         const previous = composed;
         composed = async options => previous({ ...options, input: await validate(this.inputSchema!, options.input) });

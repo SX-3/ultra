@@ -1,8 +1,9 @@
 import type { GetInput, GetOutput, Procedure } from './procedure';
-import type { Payload, Result } from './rpc';
+import type { Payload } from './rpc';
 import type { JSONValue, Simplify } from './types';
 import type { ProceduresMap, Ultra } from './ultra';
 import { compress } from './compression';
+import { isRPCResponse } from './rpc';
 
 type Timeout = ReturnType<typeof setTimeout>;
 type SocketMessage = string | Blob | ArrayBufferLike | ArrayBufferView<ArrayBufferLike>;
@@ -62,16 +63,10 @@ export function createHTTPClient<U extends Ultra<any, any, any>>(clientOptions: 
     const options = { ...clientOptions, ...invokeOptions };
 
     const timeout = options?.timeout || 10000;
-    const controller = new AbortController();
     const httpMethod = options?.method || 'POST';
     let url = `${options.baseUrl}/${method}`;
     const headers = mergeHeaders(clientOptions?.headers, options?.headers, invokeOptions?.headers);
     let body: BodyInit | null = null;
-
-    const abortTimeout = setTimeout(
-      () => controller.abort(`Timeout: ${timeout}`),
-      timeout,
-    );
 
     switch (true) {
       case httpMethod === 'GET': {
@@ -102,7 +97,7 @@ export function createHTTPClient<U extends Ultra<any, any, any>>(clientOptions: 
         method: httpMethod,
         ...(body && { body }),
         ...options,
-        signal: controller.signal,
+        signal: AbortSignal.timeout(timeout),
         headers,
       });
 
@@ -122,9 +117,6 @@ export function createHTTPClient<U extends Ultra<any, any, any>>(clientOptions: 
     catch (error: any) {
       if (error.name === 'AbortError') throw new Error(`Request aborted: ${error.message}`);
       throw error;
-    }
-    finally {
-      clearTimeout(abortTimeout);
     }
   };
 
@@ -149,12 +141,6 @@ interface WebSocketClientOptions {
   /** @default 1000 characters */
   compression?: number | false;
 
-  /** @default 3 */
-  retryCount?: number;
-
-  /** @default 1000ms */
-  retryDelay?: number;
-
   /** Call before send, you can modify data */
   onBeforeSend?: (data: SocketMessage) => SocketMessage | void;
 }
@@ -171,14 +157,12 @@ interface WebSocketRequest {
   resolve: (value?: any) => void;
   reject: (reason?: any) => void;
   timeout: Timeout;
-  pending: boolean;
+  ws: WebSocket | null;
 }
 
 // Accept Ultra instances with any extended context/socket data while preserving procedure typing
 export function createWebSocketClient<U extends Ultra<any, any, any>>(clientOptions: WebSocketClientOptions) {
   const {
-    retryCount = 3,
-    retryDelay = 1000,
     batchSize = 99,
     batchDelay = 0,
     onBeforeSend,
@@ -186,81 +170,90 @@ export function createWebSocketClient<U extends Ultra<any, any, any>>(clientOpti
   } = clientOptions;
 
   const makeId = () => Math.random().toString(36);
-  const requests: WebSocketRequest[] = [];
+  const requests = new Map<string, WebSocketRequest>();
+  const encoder = new TextEncoder();
+
   let batchTimeout: Timeout | null = null;
 
-  const send = (retry = 0) => {
+  const onMessage = (event: MessageEvent) => {
+    const ws = event.target as WebSocket;
+
+    try {
+      const response = JSON.parse(event.data);
+      if (!isRPCResponse(response)) return;
+      const request = requests.get(response.id);
+      if (!request || request.ws !== ws) return;
+
+      clearTimeout(request.timeout);
+      if ('error' in response) request.reject(response.error);
+      else request.resolve(response.result);
+      if (!requests.values().some(r => r.ws === ws)) {
+        ws.removeEventListener('message', onMessage);
+      };
+    }
+    catch (error) {
+      console.error('Client failed parse server message', error);
+    }
+  };
+
+  const onClose = (event: Event) => {
+    const ws = event.target as WebSocket;
+    ws.removeEventListener('message', onMessage);
+    requests
+      .values()
+      .filter(request => request.ws === ws)
+      .forEach(request => request.reject('Socket close'));
+  };
+
+  const wrapWithClean = <F extends (...any: any[]) => any>(id: string, fn: F) => {
+    return (...args: Parameters<F>) => {
+      const request = requests.get(id);
+      if (request) {
+        clearTimeout(request.timeout);
+        requests.delete(id);
+      }
+      return fn(...args);
+    };
+  };
+
+  const closeOptions: AddEventListenerOptions = { once: true };
+
+  const send = async () => {
     if (batchTimeout !== null) {
       clearTimeout(batchTimeout);
       batchTimeout = null;
     }
 
-    if (!requests.length) return;
-
     const socket = clientOptions.socket();
 
-    if (!socket || socket.readyState !== WebSocket.OPEN) {
-      if (retry >= retryCount) {
-        return requests.forEach((r) => {
-          clearTimeout(r.timeout);
-          r.reject('WebSocket is not open');
-        });
-      }
-      return setTimeout(() => send(retry + 1), retryDelay);
-    }
+    if (!requests.size || !socket) return;
 
-    const listener = (event: MessageEvent) => {
-      try {
-        const response: Result = JSON.parse(event.data);
-        const request = requests.find(r => r.id === response.id);
-        if (!request) return;
-        clearTimeout(request.timeout);
-        if ('error' in response) request.reject(response.error);
-        else request.resolve(response.result);
-        if (!requests.length) socket.removeEventListener('message', listener);
-      }
-      catch (error) {
-        console.error('Client failed parse server message', error);
-      }
-    };
-
-    socket.addEventListener('message', listener);
-    socket.addEventListener('close', () => {
-      socket.removeEventListener('message', listener);
-      setTimeout(send, retryDelay);
-    });
+    socket.addEventListener('message', onMessage);
+    socket.addEventListener('close', onClose, closeOptions);
+    socket.addEventListener('error', onClose, closeOptions);
 
     const payloads: Payload[] = [];
-    for (const request of requests) {
-      if (request.pending) continue;
-      request.pending = true;
+
+    for (const [id, request] of requests) {
+      if (request.ws) continue;
+      request.ws = socket;
       payloads.push({
-        id: request.id,
+        id,
         method: request.method,
         params: request.params,
       });
     }
 
+    if (!payloads.length) return;
+
     const string = JSON.stringify(payloads);
     if (compression && string.length >= compression) {
-      const text = new TextEncoder().encode(string);
-      compress(text).then(buffer => socket.send(onBeforeSend?.(buffer) ?? buffer));
+      const buffer = await compress(encoder.encode(string));
+      socket.send(onBeforeSend?.(buffer) ?? buffer);
     }
     else {
       socket.send(onBeforeSend?.(string) ?? string);
     }
-  };
-
-  const wrapWithClean = <F extends (...any: any[]) => any>(id: string, fn: F) => {
-    return (...args: Parameters<F>) => {
-      const index = requests.findIndex(r => r.id === id);
-      if (index !== -1) {
-        clearTimeout(requests[index]!.timeout);
-        requests.splice(index, 1);
-      }
-
-      return fn(...args);
-    };
   };
 
   const invoke: Invoke<WebSocketInvokeOptions> = (method, params, invokeOptions) => {
@@ -270,7 +263,7 @@ export function createWebSocketClient<U extends Ultra<any, any, any>>(clientOpti
 
     const id = makeId();
 
-    requests.push({
+    requests.set(id, {
       id,
       method,
       params,
@@ -278,11 +271,18 @@ export function createWebSocketClient<U extends Ultra<any, any, any>>(clientOpti
       resolve: wrapWithClean(id, resolve),
       reject: wrapWithClean(id, reject),
       timeout: setTimeout(wrapWithClean(id, reject), options.timeout),
-      pending: false,
+      ws: null,
     });
 
-    if (requests.length >= batchSize) send();
-    else if (batchTimeout === null) batchTimeout = setTimeout(send, batchDelay);
+    if (requests.size >= batchSize) {
+      send().catch(console.error);
+    }
+    else if (batchTimeout === null) {
+      batchTimeout = setTimeout(
+        () => send().catch(console.error),
+        batchDelay,
+      );
+    }
 
     return promise;
   };

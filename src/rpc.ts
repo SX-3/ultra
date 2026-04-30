@@ -24,3 +24,7 @@ export interface Payload {
 export function isRPC(value: any): value is Payload {
   return !!value && typeof value === 'object' && 'id' in value && 'method' in value;
 }
+
+export function isRPCResponse(value: any): value is Result {
+  return !!value && typeof value === 'object' && 'id' in value && ('result' in value || 'error' in value);
+}
