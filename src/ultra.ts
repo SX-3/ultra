@@ -131,8 +131,7 @@ export class Ultra<
   /** Build procedures and start servers */
   start(options?: StartOptions<SocketData>) {
     if (this.server) {
-      console.warn('Server is already running');
-      return this.server;
+      throw new Error('Server is already running. Create a new Ultra instance or stop the existing server first.');
     }
 
     const { routes, handlers } = this.build();
