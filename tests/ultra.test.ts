@@ -3,7 +3,7 @@ import type { Middleware } from '../src/middleware';
 import type { ProcedureHandler } from '../src/procedure';
 import type { InputFactory } from '../src/ultra';
 import { expect, expectTypeOf, it, mock } from 'bun:test';
-import { isWS } from '../src/context';
+import { isHTTP, isWS } from '../src/context';
 import { toHTTPResponse } from '../src/response';
 import { Ultra } from '../src/ultra';
 import { start } from './utils';
@@ -170,6 +170,21 @@ it.concurrent('http options', async () => {
   expect(result).toBe('pong');
 });
 
+it.concurrent('applies response headers set on the HTTP context', async () => {
+  const service = new Ultra().routes(input => ({
+    ping: input().http().handler(({ context }) => {
+      if (isHTTP(context)) context.response.headers.set('X-Custom', 'yes');
+      return 'pong';
+    }),
+  }));
+
+  const { url } = start(service);
+  const response = await fetch(`${url}ping`);
+
+  expect(response.headers.get('X-Custom')).toBe('yes');
+  expect(await response.json()).toBe('pong');
+});
+
 it.concurrent('handle procedure exceptions', async () => {
   let callAfterException = false;
   const middleware = mock(async ({ next }) => {
@@ -178,7 +193,7 @@ it.concurrent('handle procedure exceptions', async () => {
       result = await next();
     }
     catch (error) {
-      result = toHTTPResponse(error);
+      result = await toHTTPResponse(error);
       result.headers.set('X-Test', 'test');
     }
     callAfterException = true;

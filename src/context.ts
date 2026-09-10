@@ -24,8 +24,14 @@ export interface BaseContext<SD = unknown> {
   server: Server<SD>;
 }
 
+/** Mutable HTTP response state applied by the HTTP boundary after serialization. */
+export interface HTTPResponseState {
+  headers: Headers;
+}
+
 export interface HTTPContext<SD = unknown> extends BaseContext<SD> {
   request: BunRequest;
+  response: HTTPResponseState;
 }
 
 export interface WSContext<SD = unknown> extends BaseContext<SD> {

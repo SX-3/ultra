@@ -1,7 +1,6 @@
 import type { BaseContext } from './context';
 import type { Middleware } from './middleware';
 import { isHTTP } from './context';
-import { toHTTPResponse } from './response';
 
 export interface CorsConfig {
   origin: string[];
@@ -53,19 +52,12 @@ export function createCORSMiddleware(config: CorsConfig): Middleware<unknown, un
       });
     }
 
-    let response: Response;
-    try {
-      response = toHTTPResponse(await options.next());
-    }
-    catch (error) {
-      response = toHTTPResponse(error);
-    }
-
-    response.headers.set('Access-Control-Allow-Origin', origin);
+    const headers = options.context.response.headers;
+    headers.set('Access-Control-Allow-Origin', origin);
     for (const header in responseHeaders) {
-      response.headers.set(header, responseHeaders[header]!);
+      headers.set(header, responseHeaders[header]!);
     }
 
-    return response;
+    return options.next();
   };
 }

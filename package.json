@@ -1,15 +1,12 @@
 {
   "name": "@sx3/ultra",
   "type": "module",
-  "version": "0.3.2",
+  "version": "0.4.0",
   "private": false,
   "description": "Type-safe RPC over HTTP/WebSocket for Bun",
   "author": "SX3",
   "license": "MIT",
   "homepage": "https://github.com/SX-3/ultra",
-  "engines": {
-    "bun": ">=1.0.0"
-  },
   "repository": {
     "type": "git",
     "url": "https://github.com/SX-3/ultra"
@@ -45,6 +42,9 @@
   "files": [
     "dist"
   ],
+  "engines": {
+    "bun": ">=1.0.0"
+  },
   "scripts": {
     "build": "tsdown",
     "dev": "tsdown --watch",

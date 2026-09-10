@@ -43,7 +43,7 @@ describe('session', () => {
   it('should create session and respond session cookie', async () => {
     const response = await fetch(`${url}/ping`);
     expect(response.status).toBe(200);
-    const text = await response.text();
+    const text = await response.json();
     expect(text).toBe('pong');
 
     const cookie = response.headers.get('set-cookie');
@@ -83,7 +83,7 @@ describe('session', () => {
     });
 
     expect(getResponse.status).toBe(200);
-    const getData = await getResponse.text();
+    const getData = await getResponse.json();
     expect(getData).toBe('bar');
   });
 });

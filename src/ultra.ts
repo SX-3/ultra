@@ -13,21 +13,30 @@ import type {
   DeriveValue,
   GetDerived,
   GetDerivedUpgradeData,
+  HTTPResponseState,
   ReplaceSocketData,
 } from './context';
 import type { BunRouteHandler, BunRoutes } from './http';
 import type { Middleware } from './middleware';
 import type { ProcedureHandler, ProcedureOptions } from './procedure';
 import type { Payload } from './rpc';
-import type { Simplify } from './types';
-import { inflateSync, serve } from 'bun';
+import type { Serializer } from './serializer';
+import type { Promisable, Simplify } from './types';
+import { serve } from 'bun';
 import { NotFoundError } from './error';
 import { Procedure } from './procedure';
 import { toHTTPResponse, toRPCResponse } from './response';
 import { isRPC } from './rpc';
+import { jsonSerializer } from './serializer';
 
 export interface ProceduresMap {
   [key: string]: Procedure<any, any, any> | ProceduresMap;
+}
+
+/** Apply the HTTP response state collected during the request to the encoded response. */
+function applyResponseState(response: Response, state: HTTPResponseState): Response {
+  state.headers.forEach((value, key) => response.headers.set(key, value));
+  return response;
 }
 
 interface ServerEventMap<SD> {
@@ -55,6 +64,8 @@ export interface UltraOptions {
   http?: {
     enableByDefault?: boolean;
   };
+  /** Custom payload serializer. @default jsonSerializer */
+  serializer?: Serializer;
 }
 
 export class Ultra<
@@ -72,12 +83,16 @@ export class Ultra<
   };
 
   protected httpEnabled = false;
+  protected serializer: Serializer = jsonSerializer;
+  protected readonly serializerExplicit: boolean;
   protected server: Server<SocketData> | null = null;
   protected handlers: Map<string, ProcedureHandler<unknown, unknown, Context>> | null = null;
 
   constructor(options?: UltraOptions) {
     if (options) this.options = { ...this.options, ...options };
     this.httpEnabled = this.options.http?.enableByDefault ?? false;
+    this.serializer = this.options.serializer ?? jsonSerializer;
+    this.serializerExplicit = this.options.serializer !== undefined;
   }
 
   /** Register procedures */
@@ -138,7 +153,6 @@ export class Ultra<
     this.handlers = handlers;
 
     // ? Shared text decoder
-    const textDecoder = new TextDecoder();
     const notFoundHandler = this.wrapHandler(
       () => new Response('Not Found', { status: 404 }),
       this.middlewares,
@@ -159,13 +173,9 @@ export class Ultra<
               return;
             }
 
-            if (!server.upgrade(
-              request,
-              // @ts-expect-error Bun types
-              await this.enrichContext({ server, request })
-                .then(ctx => this.enrichUpgrade(ctx)),
-            )
-            ) {
+            const context = await this.enrichContext({ server, request, response: { headers: new Headers() } });
+            // @ts-expect-error Bun types
+            if (!server.upgrade(request, await this.enrichUpgrade(context))) {
               return new Response('WebSocket upgrade failed', { status: 500 });
             };
           },
@@ -173,10 +183,12 @@ export class Ultra<
           // Not found handler
           '/*': async (request, server) => {
             this.emit('http:request', request, server);
-            return notFoundHandler({
+            const responseState: HTTPResponseState = { headers: new Headers() };
+            const result = await notFoundHandler({
               input: null,
-              context: await this.enrichContext({ server, request }),
+              context: await this.enrichContext({ server, request, response: responseState }),
             });
+            return applyResponseState(await toHTTPResponse(result, this.serializer), responseState);
           },
         },
       }),
@@ -187,15 +199,10 @@ export class Ultra<
         close: (ws, code, reason) => { this.emit('ws:close', ws, code, reason); },
         message: async (ws, message) => {
           this.emit('ws:message', ws, message);
-          let data: object | null = null;
+          let data: unknown;
 
           try {
-            if (typeof message === 'string') {
-              data = JSON.parse(message);
-            }
-            else {
-              data = JSON.parse(textDecoder.decode(inflateSync(message)));
-            }
+            data = await this.serializer.deserialize(message);
           }
           catch (error) {
             console.error('Message payload parsing failed', error);
@@ -255,33 +262,36 @@ export class Ultra<
   protected async handleRPC(rpc: Payload, ws: ServerWebSocket<SocketData>, context: Context) {
     const handler = this.handlers!.get(rpc.method);
     if (!handler) {
-      ws.send(toRPCResponse(rpc.id, new NotFoundError()));
+      ws.send(await toRPCResponse(rpc.id, new NotFoundError(), this.serializer));
       return;
     }
 
     try {
-      ws.send(toRPCResponse(
-        rpc.id,
-        await handler({ input: rpc.params, context }),
-      ));
+      const result = await handler({ input: rpc.params, context });
+      ws.send(await toRPCResponse(rpc.id, result, this.serializer));
     }
     catch (error) {
       this.emit('error', error as ErrorLike);
-      ws.send(toRPCResponse(rpc.id, error));
+      ws.send(await toRPCResponse(rpc.id, error, this.serializer));
     }
   }
 
   /** Enrich context with derived values */
-  protected async enrichContext<C extends AnyContext<SocketData>>(context: C): Promise<Context> {
-    // ? Derive sequentially to allow using previous derived values
-    for (const derive of this.derived) {
-      Object.assign(
-        context,
-        typeof derive === 'function' ? await derive(context as any) : derive,
-      );
-    }
+  protected enrichContext<C extends AnyContext<SocketData>>(context: C): Promisable<Context> {
+    // ? Fast path: avoid an async frame when there is nothing to derive
+    if (!this.derived.size) return context as unknown as Context;
 
-    return context as any;
+    // ? Derive sequentially to allow using previous derived values
+    return (async () => {
+      for (const derive of this.derived) {
+        Object.assign(
+          context,
+          typeof derive === 'function' ? await derive(context as any) : derive,
+        );
+      }
+
+      return context as any;
+    })();
   }
 
   /** Enrich upgrade options with derived values */
@@ -304,6 +314,16 @@ export class Ultra<
 
   /** Merge other Ultra instance with deduplication */
   protected merge(module: Ultra<any, any, any>) {
+    // ? Adopt a module serializer only when the host neither configured one
+    // ? explicitly nor already adopted a different one.
+    if (
+      !this.serializerExplicit
+      && this.serializer === jsonSerializer
+      && module.serializer !== jsonSerializer
+    ) {
+      this.serializer = module.serializer;
+    }
+
     for (const [initializer, middlewares] of module.initializers) {
       const existed = this.initializers.get(initializer);
       if (!existed) this.initializers.set(initializer, new Set(middlewares));
@@ -338,6 +358,9 @@ export class Ultra<
   protected build() {
     const handlers = new Map<string, ProcedureHandler<any, any, Context>>();
     const routes: BunRoutes = {};
+    // Capture once: the serializer is fixed at build time and used per request.
+    const serializer = this.serializer;
+    const textBody = serializer.binary !== true;
 
     const inputFactory: InputFactory<Context> = <const IN>(schema?: IN) => {
       const procedure = new Procedure<IN, unknown, Context>();
@@ -400,6 +423,12 @@ export class Ultra<
                   const type = request.headers.get('Content-Type');
                   if (type) {
                     switch (true) {
+                      case type.startsWith(serializer.contentType):
+                        // Text codecs read UTF-8 directly; binary codecs need raw bytes.
+                        input = await serializer.deserialize(
+                          textBody ? await request.text() : new Uint8Array(await request.arrayBuffer()),
+                        );
+                        break;
                       case type.startsWith('application/json'):
                         input = await request.json();
                         break;
@@ -418,15 +447,16 @@ export class Ultra<
               }
             }
 
+            const responseState: HTTPResponseState = { headers: new Headers() };
+            const context = await this.enrichContext({ server, request, response: responseState });
+
             try {
-              return toHTTPResponse(await handler({
-                input,
-                context: await this.enrichContext({ server, request }),
-              }));
+              const result = await handler({ input, context });
+              return applyResponseState(await toHTTPResponse(result, serializer), responseState);
             }
             catch (error) {
               this.emit('error', error as ErrorLike);
-              return toHTTPResponse(error);
+              return applyResponseState(await toHTTPResponse(error, serializer), responseState);
             }
           };
 

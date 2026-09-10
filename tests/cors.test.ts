@@ -58,7 +58,7 @@ describe('CORS middleware integration', async () => {
     });
 
     expect(res.status).toBe(200);
-    expect(await res.text()).toEqual('pong');
+    expect(await res.json()).toEqual('pong');
     // Non-preflight responses: only Allow-Origin + optional credentials/expose.
     expect(res.headers.get('Access-Control-Allow-Origin')).toBe(ALLOWED_ORIGIN);
     expect(res.headers.get('Access-Control-Expose-Headers')).toBe('X-Expose');
@@ -79,7 +79,7 @@ describe('CORS middleware integration', async () => {
     });
 
     expect(res.status).toBe(200);
-    expect(await res.text()).toEqual('pong');
+    expect(await res.json()).toEqual('pong');
     expect(res.headers.get('Access-Control-Allow-Origin')).toBeNull();
   });
 
@@ -88,7 +88,7 @@ describe('CORS middleware integration', async () => {
       method: 'GET',
     });
     expect(res.status).toBe(200);
-    expect(await res.text()).toEqual('pong');
+    expect(await res.json()).toEqual('pong');
     expect(res.headers.get('Access-Control-Allow-Origin')).toBeNull();
   });
 

@@ -1,7 +1,29 @@
 import type { Result } from './rpc';
+import type { Serializer, WireData } from './serializer';
 import { UltraError } from './error';
+import { jsonSerializer } from './serializer';
 
-export function toHTTPResponse(data: unknown): Response {
+// `new Response(body, { headers: { ... } })` materializes a Headers instance on
+// every call. A Headers object is copied by `Response`, so a memoized instance
+// per content type can be safely reused.
+const contentTypeHeaders = new Map<string, Headers>();
+
+function headersFor(contentType: string): Headers {
+  let headers = contentTypeHeaders.get(contentType);
+  if (!headers) {
+    headers = new Headers({ 'Content-Type': contentType });
+    contentTypeHeaders.set(contentType, headers);
+  }
+  return headers;
+}
+
+/**
+ * Convert a procedure result into an HTTP `Response`.
+ *
+ * This is the single serialization boundary for HTTP: every non-`Response`,
+ * non-error, non-`undefined` value is encoded with `serializer`.
+ */
+export async function toHTTPResponse(data: unknown, serializer: Serializer = jsonSerializer): Promise<Response> {
   switch (true) {
     case data instanceof Response:
       return data;
@@ -9,16 +31,23 @@ export function toHTTPResponse(data: unknown): Response {
       return data.toResponse();
     case data instanceof Error:
       return new Response(data.message, { status: 500 });
-    case typeof data === 'object':
-      return Response.json(data);
-    case data === null || data === undefined:
+    case data === undefined:
       return new Response(null, { status: 204 });
-    default:
-      return new Response(String(data));
+    default: {
+      const body = await serializer.serialize(data);
+      return new Response((body ?? String(data)) as unknown as BodyInit, {
+        headers: headersFor(serializer.contentType),
+      });
+    }
   }
 }
 
-export function toRPCResponse(id: string, data: unknown): string {
+/** Convert a procedure result into an encoded RPC envelope. */
+export async function toRPCResponse(
+  id: string,
+  data: unknown,
+  serializer: Serializer = jsonSerializer,
+): Promise<WireData> {
   let result: Result;
   switch (true) {
     case data instanceof UltraError:
@@ -30,12 +59,9 @@ export function toRPCResponse(id: string, data: unknown): string {
     case data instanceof Response:
       result = { id, error: { code: data.status, message: data.statusText } };
       break;
-    case typeof data === 'object' || typeof data === 'number' || typeof data === 'boolean':
-      // @ts-expect-error mojet
-      result = { id, result: data };
-      break;
     default:
-      result = { id, result: String(data) };
+      result = { id, result: data ?? null };
   }
-  return JSON.stringify(result);
+
+  return await serializer.serialize(result) ?? '';
 }

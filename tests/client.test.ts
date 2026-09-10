@@ -1,4 +1,4 @@
-import { describe, expect, expectTypeOf, it, mock } from 'bun:test';
+import { describe, expect, expectTypeOf, it } from 'bun:test';
 import { createSuperClient, createWebSocketClient } from '../src/client';
 import { Ultra } from '../src/ultra';
 import { makeSchema, start } from './utils';
@@ -127,28 +127,6 @@ describe('clients', async () => {
       const result = await Promise.all(promises);
 
       expect(result).toEqual(['One', 'Hello World!', 'Three']);
-    });
-
-    it('compression', async () => {
-      const onBeforeSend = mock((data: any) => {
-        expect(data).not.toBeString();
-      });
-
-      const client = createWebSocketClient<typeof app>({
-        socket: () => socket,
-        compression: 100,
-        onBeforeSend,
-      });
-
-      const promises: Promise<any>[] = [];
-
-      for (let i = 0; i < 80; i++) {
-        promises.push(client.hello());
-      }
-
-      await Promise.all(promises);
-
-      expect(onBeforeSend).toBeCalledTimes(1);
     });
   });
 });

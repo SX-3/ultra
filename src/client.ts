@@ -1,12 +1,12 @@
 import type { GetInput, GetOutput, Procedure } from './procedure';
 import type { Payload } from './rpc';
-import type { JSONValue, Simplify } from './types';
+import type { Serializer, WireData } from './serializer';
+import type { Simplify } from './types';
 import type { ProceduresMap, Ultra } from './ultra';
-import { compress } from './compression';
 import { isRPCResponse } from './rpc';
+import { jsonSerializer } from './serializer';
 
 type Timeout = ReturnType<typeof setTimeout>;
-type SocketMessage = string | Blob | ArrayBufferLike | ArrayBufferView<ArrayBufferLike>;
 type GetProcedures<T> = T extends Ultra<infer P, any, any> ? P : never;
 
 type ClientFunction<I, O, IO>
@@ -25,9 +25,18 @@ type BuildClient<P, CO> = Simplify<{
 type Invoke<CO> = (method: string, params: any, invokeOptions?: CO) => Promise<unknown>;
 
 function proxyClient<P extends ProceduresMap, IO>(invoke: Invoke<IO>, path: string[] = []): BuildClient<P, IO> {
+  // Cache child proxies so repeated property access doesn't allocate new ones.
+  const children = new Map<string, BuildClient<P, IO>>();
+
   return new Proxy(() => {}, {
     get(_, prop) {
-      if (typeof prop === 'string') return proxyClient<P, IO>(invoke, [...path, prop]);
+      if (typeof prop !== 'string') return undefined;
+      let child = children.get(prop);
+      if (child === undefined) {
+        child = proxyClient<P, IO>(invoke, [...path, prop]);
+        children.set(prop, child);
+      }
+      return child;
     },
 
     apply(_, __, args) {
@@ -51,21 +60,33 @@ function mergeHeaders(...sources: Array<HeadersInit | undefined>): Headers {
   return result;
 }
 
+/** Normalize a WebSocket message (text, Blob, ArrayBuffer or typed array) to wire data. */
+async function toWireData(data: unknown): Promise<WireData | null> {
+  if (typeof data === 'string') return data;
+  if (data instanceof Blob) return new Uint8Array(await data.arrayBuffer());
+  if (data instanceof ArrayBuffer) return new Uint8Array(data);
+  if (ArrayBuffer.isView(data)) return new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+  return null;
+}
+
 interface HTTPClientOptions extends Omit<RequestInit, 'body'> {
   baseUrl: string;
   /** @default 10 seconds */
   timeout?: number;
+  /** Custom payload serializer. @default jsonSerializer */
+  serializer?: Serializer;
 }
 
 // Accept Ultra instances with any extended context/socket data while preserving procedure typing
 export function createHTTPClient<U extends Ultra<any, any, any>>(clientOptions: HTTPClientOptions) {
   const invoke: Invoke<Partial<HTTPClientOptions>> = async (method, params, invokeOptions) => {
     const options = { ...clientOptions, ...invokeOptions };
+    const serializer = options.serializer ?? jsonSerializer;
 
     const timeout = options?.timeout || 10000;
     const httpMethod = options?.method || 'POST';
     let url = `${options.baseUrl}/${method}`;
-    const headers = mergeHeaders(clientOptions?.headers, options?.headers, invokeOptions?.headers);
+    const headers = mergeHeaders(clientOptions?.headers, invokeOptions?.headers);
     let body: BodyInit | null = null;
 
     switch (true) {
@@ -80,6 +101,10 @@ export function createHTTPClient<U extends Ultra<any, any, any>>(clientOptions: 
         if (queryString) url += `?${queryString}`;
         break;
       }
+      case params === undefined: {
+        body = null;
+        break;
+      }
       case params instanceof FormData:
         body = params;
         break;
@@ -88,8 +113,8 @@ export function createHTTPClient<U extends Ultra<any, any, any>>(clientOptions: 
         body = params;
         break;
       default:
-        headers.set('Content-Type', 'application/json');
-        body = JSON.stringify(params);
+        headers.set('Content-Type', serializer.contentType);
+        body = (await serializer.serialize(params) ?? null) as unknown as BodyInit | null;
     }
 
     try {
@@ -106,6 +131,11 @@ export function createHTTPClient<U extends Ultra<any, any, any>>(clientOptions: 
       switch (true) {
         case response.status === 204:
           return null;
+        case type.startsWith(serializer.contentType):
+          // Text codecs read UTF-8 directly; binary codecs need raw bytes.
+          return await serializer.deserialize(
+            serializer.binary ? new Uint8Array(await response.arrayBuffer()) : await response.text(),
+          );
         case type.startsWith('application/json'):
           return await response.json();
         case type.startsWith('text/'):
@@ -138,11 +168,11 @@ interface WebSocketClientOptions {
   /** @default 0 */
   batchDelay?: number;
 
-  /** @default 1000 characters */
-  compression?: number | false;
-
   /** Call before send, you can modify data */
-  onBeforeSend?: (data: SocketMessage) => SocketMessage | void;
+  onBeforeSend?: (data: WireData) => WireData | void;
+
+  /** Custom payload serializer. @default jsonSerializer */
+  serializer?: Serializer;
 }
 
 interface WebSocketInvokeOptions {
@@ -152,7 +182,7 @@ interface WebSocketInvokeOptions {
 interface WebSocketRequest {
   id: string;
   method: string;
-  params: JSONValue;
+  params: unknown;
   options?: WebSocketInvokeOptions;
   resolve: (value?: any) => void;
   reject: (reason?: any) => void;
@@ -166,20 +196,23 @@ export function createWebSocketClient<U extends Ultra<any, any, any>>(clientOpti
     batchSize = 99,
     batchDelay = 0,
     onBeforeSend,
-    compression,
   } = clientOptions;
+
+  const serializer = clientOptions.serializer ?? jsonSerializer;
 
   const makeId = () => Math.random().toString(36);
   const requests = new Map<string, WebSocketRequest>();
-  const encoder = new TextEncoder();
 
   let batchTimeout: Timeout | null = null;
 
-  const onMessage = (event: MessageEvent) => {
+  const onMessage = async (event: MessageEvent) => {
     const ws = event.target as WebSocket;
 
     try {
-      const response = JSON.parse(event.data);
+      const data = await toWireData(event.data);
+      if (data === null) return;
+
+      const response = await serializer.deserialize(data);
       if (!isRPCResponse(response)) return;
       const request = requests.get(response.id);
       if (!request || request.ws !== ws) return;
@@ -246,14 +279,10 @@ export function createWebSocketClient<U extends Ultra<any, any, any>>(clientOpti
 
     if (!payloads.length) return;
 
-    const string = JSON.stringify(payloads);
-    if (compression && string.length >= compression) {
-      const buffer = await compress(encoder.encode(string));
-      socket.send(onBeforeSend?.(buffer) ?? buffer);
-    }
-    else {
-      socket.send(onBeforeSend?.(string) ?? string);
-    }
+    const data = await serializer.serialize(payloads);
+    if (data === undefined) return;
+
+    socket.send(onBeforeSend?.(data) ?? data);
   };
 
   const invoke: Invoke<WebSocketInvokeOptions> = (method, params, invokeOptions) => {

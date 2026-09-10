@@ -1,5 +1,3 @@
-import type { JSONValue } from './types';
-
 export interface ErrorResult {
   id: string;
   error: {
@@ -10,7 +8,7 @@ export interface ErrorResult {
 
 export interface SuccessResult {
   id: string;
-  result: JSONValue;
+  result: unknown;
 }
 
 export type Result = ErrorResult | SuccessResult;
@@ -18,7 +16,7 @@ export type Result = ErrorResult | SuccessResult;
 export interface Payload {
   id: string;
   method: string;
-  params?: JSONValue;
+  params?: unknown;
 }
 
 export function isRPC(value: any): value is Payload {

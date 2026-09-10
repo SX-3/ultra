@@ -14,6 +14,7 @@ Type-safe and fast RPC over HTTP/WebSocket for [Bun](https://bun.sh).
   - [Protocol independence](#protocol-independence)
 - [Middleware](#middleware)
 - [Validation](#validation)
+- [Serialization](#serialization)
 - [Context](#context)
 - [Built-in features](#built-in-features)
   - [CORS](#cors)
@@ -197,6 +198,111 @@ const api = new Ultra().routes(input => ({
     }),
 }));
 ```
+
+## Serialization
+
+By default Ultra encodes payloads with `JSON.stringify` and decodes them with `JSON.parse`.
+You can plug in your own serializer to send values JSON cannot represent (`bigint`, `Map`, `Set`, custom classes), to use a third-party library (superjson, MessagePack, CBOR, ...), or to produce binary frames.
+
+A serializer is an object with `contentType`, `serialize`, and `deserialize`.
+`serialize`/`deserialize` may be synchronous or asynchronous, and the encoded form may be a `string` (WebSocket text frame / `text/*` body) or a `Uint8Array` (binary frame / binary body):
+
+```ts
+// serializer.ts
+import { defineSerializer } from '@sx3/ultra/serializer';
+
+export const bigintSerializer = defineSerializer({
+  // Used as the HTTP Content-Type for outgoing requests and responses
+  contentType: 'application/json',
+  serialize: value => JSON.stringify(value, (_, v) =>
+    typeof v === 'bigint' ? { $type: 'bigint', value: v.toString() } : v),
+  deserialize: data => JSON.parse(
+    typeof data === 'string' ? data : new TextDecoder().decode(data),
+    (_, v) => v?.$type === 'bigint' ? BigInt(v.value) : v,
+  ),
+});
+```
+
+Pass it to the server via the `serializer` option and to every client:
+
+```ts
+// server.ts
+import { Ultra } from '@sx3/ultra';
+import { bigintSerializer } from './serializer';
+
+export const app = new Ultra({ serializer: bigintSerializer }).routes(input => ({
+  nextId: input<{ current: bigint }>()
+    .http()
+    .handler(({ input }) => input.current + 1n),
+}));
+
+export type Server = typeof app;
+```
+
+```ts
+// clients.ts
+import type { Server } from './server';
+import { createHTTPClient, createWebSocketClient } from '@sx3/ultra/client';
+import { bigintSerializer } from './serializer';
+
+const http = createHTTPClient<Server>({
+  baseUrl: 'http://localhost:3000',
+  serializer: bigintSerializer,
+});
+
+let socket = new WebSocket('ws://localhost:3000/ws');
+const ws = createWebSocketClient<Server>({
+  socket: () => socket,
+  serializer: bigintSerializer,
+});
+
+const id = await http.nextId({ current: 41n }); // 42n (bigint)
+```
+
+### Binary serializers
+
+`serialize` may return a `Uint8Array`, in which case Ultra sends a WebSocket binary frame or a binary HTTP body.
+`deserialize` receives either a `string` or a `Uint8Array` depending on the transport, so use the exported `toText`/`toBytes` helpers to normalize:
+
+```ts
+import { defineSerializer, toBytes } from '@sx3/ultra/serializer';
+
+export const binarySerializer = defineSerializer({
+  contentType: 'application/octet-stream',
+  // Mark binary codecs so HTTP transports read/write raw bytes
+  binary: true,
+  serialize: value => encode(value), // returns Uint8Array
+  deserialize: data => decode(toBytes(data)),
+});
+```
+
+### Compression
+
+Compression is a payload-codec concern rather than a transport concern, so it composes around a serializer instead of being hardcoded into the HTTP/WebSocket transports.
+`createCompressedSerializer` wraps any serializer and compresses payloads above a threshold byte size:
+
+```ts
+import { createCompressedSerializer } from '@sx3/ultra/compression';
+import { bigintSerializer } from './serializer';
+
+export const serializer = createCompressedSerializer(bigintSerializer, {
+  threshold: 1024, // bytes, @default 1024
+});
+```
+
+Configure the wrapped serializer on both the server and the clients.
+
+Notes:
+
+- The server and every client must use the same serializer, otherwise the wire format won't match. This also applies to `createCompressedSerializer`.
+- For HTTP, Ultra uses `contentType` to recognize responses produced by the serializer. Returning raw `Response` objects from handlers still works, but avoid a custom `contentType` that collides with them.
+- A custom serializer configured on a module is adopted by the host when the module is merged with `.use(module)`. An explicitly configured host serializer always wins.
+- The built-in `jsonSerializer` is exported from `@sx3/ultra/serializer` if you need to reference or compose it.
+- `Response` instances, errors, and `undefined` results are handled by Ultra directly and bypass the serializer.
+- Values returned from handlers are always encoded by the serializer, including strings and numbers. Return a `Response` to send a raw text or binary body.
+- Encoding and decoding happen once, at the HTTP boundary, so middlewares (including CORS) stay serializer-agnostic.
+- The deserializer runs on untrusted input (HTTP bodies and WebSocket messages). Never plug in a codec that executes the data, such as an `eval`-based parser.
+- GET request parameters are always encoded in the URL query string and are not passed through the serializer.
 
 ## Context
 
@@ -422,6 +528,21 @@ const cors = createCORSMiddleware({
 });
 
 const app = new Ultra().use(cors); // Apply CORS middleware globally
+```
+
+Any middleware or handler can add HTTP response headers through the HTTP context.
+CORS uses the same mechanism, so it never has to touch serialization:
+
+```ts
+import { Ultra } from '@sx3/ultra';
+import { isHTTP } from '@sx3/ultra/context';
+
+const app = new Ultra().routes(input => ({
+  ping: input().http().handler(({ context }) => {
+    if (isHTTP(context)) context.response.headers.set('X-Custom', 'yes');
+    return 'pong';
+  }),
+}));
 ```
 
 ### Sessions
