@@ -158,6 +158,41 @@ it.concurrent('enriches context with derived values', async () => {
   await stop();
 });
 
+it.concurrent('exposes the procedure route to handlers and middlewares', async () => {
+  const seen: string[] = [];
+  const middleware = mock<Middleware<any, any, BaseContext>>(({ route, next }) => {
+    expectTypeOf(route).toEqualTypeOf<string>();
+    seen.push(route);
+    return next();
+  });
+
+  const service = new Ultra()
+    .use(middleware)
+    .routes(input => ({
+      ping: input().http().handler(({ route }) => {
+        expectTypeOf(route).toEqualTypeOf<string>();
+        return route;
+      }),
+      nested: {
+        deep: input().http().handler(({ route }) => route),
+      },
+    }));
+
+  const { http, stop, ws, isReady } = start(service);
+
+  expect(await http.ping()).toBe('ping');
+  expect(await http.nested.deep()).toBe('nested/deep');
+  expect(seen).toEqual(['ping', 'nested/deep']);
+
+  await isReady;
+
+  expect(await ws.ping(), 'ws transport failed').toBe('ping');
+  expect(await ws.nested.deep(), 'ws transport failed').toBe('nested/deep');
+  expect(seen).toEqual(['ping', 'nested/deep', 'ping', 'nested/deep']);
+
+  await stop();
+});
+
 it.concurrent('http options', async () => {
   const service = new Ultra({ http: { enableByDefault: true } })
     .routes(input => ({

@@ -186,6 +186,7 @@ export class Ultra<
             const responseState: HTTPResponseState = { headers: new Headers() };
             const result = await notFoundHandler({
               input: null,
+              route: new URL(request.url).pathname,
               context: await this.enrichContext({ server, request, response: responseState }),
             });
             return applyResponseState(await toHTTPResponse(result, this.serializer), responseState);
@@ -267,7 +268,7 @@ export class Ultra<
     }
 
     try {
-      const result = await handler({ input: rpc.params, context });
+      const result = await handler({ input: rpc.params, route: rpc.method, context });
       ws.send(await toRPCResponse(rpc.id, result, this.serializer));
     }
     catch (error) {
@@ -451,7 +452,7 @@ export class Ultra<
             const context = await this.enrichContext({ server, request, response: responseState });
 
             try {
-              const result = await handler({ input, context });
+              const result = await handler({ input, route: path, context });
               return applyResponseState(await toHTTPResponse(result, serializer), responseState);
             }
             catch (error) {

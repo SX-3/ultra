@@ -6,6 +6,8 @@ import { validate } from './validation';
 
 export interface ProcedureOptions<I, C> {
   input: I;
+  /** Procedure path, e.g. `users/list`. Consistent across HTTP and WebSocket. */
+  route: string;
   context: C;
 }
 

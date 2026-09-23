@@ -130,6 +130,17 @@ const app = new Ultra()
   }), [isAuthenticated]); // Apply middleware scoped to routes
 ```
 
+Every handler and middleware receives the current procedure path as `route` (for example `users/list`).
+It is the same value for HTTP and WebSocket, so it is handy for logging, tracing and metrics:
+
+```ts
+const app = new Ultra()
+  .use(({ route, next }) => {
+    console.log(`-> ${route}`);
+    return next();
+  });
+```
+
 ## Validation
 
 Ultra supports any library compatible with [Standard Schema](https://standardschema.dev/schema#what-schema-libraries-implement-the-spec).
