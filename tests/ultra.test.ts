@@ -252,3 +252,50 @@ it.concurrent('handle procedure exceptions', async () => {
   expect(response.text()).resolves.toBe('Unknown error');
   expect(response.headers.get('X-Test')).toBe('test');
 });
+
+it.concurrent('parses GET query parameters into procedure input', async () => {
+  const service = new Ultra().routes(input => ({
+    echo: input<Record<string, string>>().http('GET').handler(({ input }) => input),
+  }));
+
+  const { url, stop } = start(service);
+
+  const response = await fetch(`${url}echo?a=1&b=two`);
+
+  expect(await response.json()).toEqual({ a: '1', b: 'two' });
+
+  await stop();
+});
+
+it.concurrent('passes a body with an unknown Content-Type through to the handler', async () => {
+  const service = new Ultra().routes(input => ({
+    raw: input().http().handler(async ({ input }) => new Response(input as ReadableStream)),
+  }));
+
+  const { url, stop } = start(service);
+
+  const response = await fetch(`${url}raw`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/octet-stream' },
+    body: 'raw-payload',
+  });
+
+  expect(response.status).toBe(200);
+  expect(await response.text()).toBe('raw-payload');
+
+  await stop();
+});
+
+it.concurrent('serves WebSocket-only apps without HTTP procedures', async () => {
+  const service = new Ultra().routes(input => ({
+    ping: input().handler(() => 'pong'),
+  }));
+
+  const { ws, stop, isReady } = start(service);
+
+  await isReady;
+
+  expect(await ws.ping()).toBe('pong');
+
+  await stop();
+});

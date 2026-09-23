@@ -159,28 +159,29 @@ export class Ultra<
     );
 
     this.server = serve<SocketData>({
-      ...(this.httpEnabled && {
-        routes: {
-          // Procedure routes
-          ...routes,
-          '/ws': async (request, server) => {
-            this.emit('http:request', request, server);
-            if (!this.derivedUpgrade.size) {
-              // @ts-expect-error Bun types
-              if (!server.upgrade(request)) {
-                return new Response('WebSocket upgrade failed', { status: 500 });
-              };
-              return;
-            }
+      routes: {
+        // Procedure routes
+        ...routes,
 
-            const context = await this.enrichContext({ server, request, response: { headers: new Headers() } });
+        '/ws': async (request, server) => {
+          this.emit('http:request', request, server);
+          if (!this.derivedUpgrade.size) {
             // @ts-expect-error Bun types
-            if (!server.upgrade(request, await this.enrichUpgrade(context))) {
+            if (!server.upgrade(request)) {
               return new Response('WebSocket upgrade failed', { status: 500 });
             };
-          },
+            return;
+          }
 
-          // Not found handler
+          const context = await this.enrichContext({ server, request, response: { headers: new Headers() } });
+          // @ts-expect-error Bun types
+          if (!server.upgrade(request, await this.enrichUpgrade(context))) {
+            return new Response('WebSocket upgrade failed', { status: 500 });
+          };
+        },
+
+        // Not found handler (HTTP only; WebSocket does not need it)
+        ...(this.httpEnabled && {
           '/*': async (request, server) => {
             this.emit('http:request', request, server);
             const responseState: HTTPResponseState = { headers: new Headers() };
@@ -191,8 +192,8 @@ export class Ultra<
             });
             return applyResponseState(await toHTTPResponse(result, this.serializer), responseState);
           },
-        },
-      }),
+        }),
+      },
 
       websocket: {
         data: {} as SocketData,
@@ -410,41 +411,34 @@ export class Ultra<
             let input: any = request.body;
 
             // Parse input
-            if (input) {
-              // Parse GET with query parameters
-              if (request.method === 'GET') {
-                const query = request.url.indexOf('?');
-                if (query !== -1 && query < request.url.length - 1) {
-                  input = Object.fromEntries(new URLSearchParams(request.url.slice(query + 1)).entries());
-                }
+            if (request.method === 'GET') {
+              // A GET body is ignored; only query parameters are used as input.
+              input = null;
+              const query = request.url.indexOf('?');
+              if (query !== -1 && query < request.url.length - 1) {
+                input = Object.fromEntries(new URLSearchParams(request.url.slice(query + 1)).entries());
               }
-              else {
-                // Have content
-                if (request.headers.get('Content-Length') !== '0') {
-                  const type = request.headers.get('Content-Type');
-                  if (type) {
-                    switch (true) {
-                      case type.startsWith(serializer.contentType):
-                        // Text codecs read UTF-8 directly; binary codecs need raw bytes.
-                        input = await serializer.deserialize(
-                          textBody ? await request.text() : new Uint8Array(await request.arrayBuffer()),
-                        );
-                        break;
-                      case type.startsWith('application/json'):
-                        input = await request.json();
-                        break;
-                      case type.startsWith('text'):
-                        input = await request.text();
-                        break;
-                      case type.startsWith('multipart/form-data'):
-                        input = await request.formData();
-                        break;
-                      default:
-                        console.error(`Unsupported Content-Type for procedure ${path}: ${type}`);
-                        break;
-                    }
-                  }
-                }
+            }
+            // Have content
+            else if (input && request.headers.get('Content-Length') !== '0') {
+              const type = request.headers.get('Content-Type');
+              switch (true) {
+                case type?.startsWith(serializer.contentType):
+                  // Text codecs read UTF-8 directly; binary codecs need raw bytes.
+                  input = await serializer.deserialize(
+                    textBody ? await request.text() : new Uint8Array(await request.arrayBuffer()),
+                  );
+                  break;
+                case type?.startsWith('application/json'):
+                  input = await request.json();
+                  break;
+                case type?.startsWith('text'):
+                  input = await request.text();
+                  break;
+                case type?.startsWith('multipart/form-data'):
+                  input = await request.formData();
+                  break;
+                // Unknown content types keep the raw body so procedures can decode it themselves.
               }
             }
 

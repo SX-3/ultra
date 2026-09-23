@@ -39,3 +39,15 @@ it('compressed serializer round-trips small and large payloads', async () => {
   expect(largeEncoded![0]).toBe(1);
   expect(await serializer.deserialize(largeEncoded!)).toEqual(large);
 });
+
+it('round-trips large incompressible payloads without overflowing the stack', async () => {
+  const size = 16 * 1024 * 1024;
+  const data = new Uint8Array(size);
+  for (let i = 0; i < size; i++) data[i] = (Math.random() * 256) | 0;
+
+  const compressed = await compress(data, 'deflate-raw');
+  const decompressed = await decompress(compressed, 'deflate-raw');
+
+  expect(decompressed.byteLength).toBe(size);
+  expect(decompressed).toEqual(data);
+});

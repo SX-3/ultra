@@ -3,17 +3,31 @@ import { defineSerializer, toBytes } from './serializer';
 
 async function writeAndReadStream(stream: CompressionStream | DecompressionStream, data: Uint8Array) {
   const writer = stream.writable.getWriter();
-  writer.write(data as unknown as BufferSource);
-  writer.close();
+  // Start writing without awaiting: the write settles only once the reader below
+  // drains the readable side. Errors surface through `reader.read()`.
+  writer.write(data as unknown as BufferSource).then(() => writer.close()).catch(() => {});
+
   const reader = stream.readable.getReader();
-  const chunks: number[] = [];
+  const chunks: Uint8Array[] = [];
+  let length = 0;
+
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
-    chunks.push(...value);
+    chunks.push(value);
+    length += value.byteLength;
   }
 
-  return new Uint8Array(chunks);
+  // Copy into a single buffer instead of spreading bytes as arguments, which
+  // overflows the call stack for large chunks.
+  const result = new Uint8Array(length);
+  let offset = 0;
+  for (const chunk of chunks) {
+    result.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+
+  return result;
 }
 
 export function compress(data: Uint8Array, format: CompressionFormat = 'deflate-raw') {
